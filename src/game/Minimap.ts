@@ -1,4 +1,4 @@
-import { BufferAttribute, BufferGeometry, Color, Group, Mesh, PlaneGeometry, Vector2 } from 'three';
+import { BufferAttribute, BufferGeometry, CircleGeometry, Color, Group, Mesh, PlaneGeometry, Vector2 } from 'three';
 import { MeshBasicNodeMaterial } from 'three/webgpu';
 import { uniform } from 'three/tsl';
 import { panelMaterial } from '@/ui/Text';
@@ -93,8 +93,9 @@ export class Minimap {
       material.depthTest = false;
       material.depthWrite = false;
 
-      const radius = BLIP_RADIUS;
-      const mesh = new Mesh(new PlaneGeometry(radius * 2, radius * 2), material);
+      // Circles, not squares: a craft is a dot on a map, and at this size a
+      // square reads as a UI element rather than as a position.
+      const mesh = new Mesh(new CircleGeometry(BLIP_RADIUS, 16), material);
       mesh.renderOrder = 7;
       this.blips.push({ mesh, colour });
       this.group.add(mesh);

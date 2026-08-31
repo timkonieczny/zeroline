@@ -22,7 +22,7 @@ export interface TrackVertex {
   width: number;
   /** Bank override in degrees. Omit to derive it from the radius. */
   bank?: number;
-  /** Corner name, e.g. "T6 HAIRPIN". */
+  /** Corner name, e.g. "T6 Hairpin". */
   name?: string;
 }
 

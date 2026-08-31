@@ -22,7 +22,7 @@ export interface SpeedClass {
 export const SPEED_CLASSES: readonly SpeedClass[] = [
   {
     id: 'vector',
-    name: 'VECTOR',
+    name: 'Vector',
     blurb: 'Licence class. Learn the circuit before it learns you.',
     speed: 0.72,
     accel: 0.82,
@@ -31,7 +31,7 @@ export const SPEED_CLASSES: readonly SpeedClass[] = [
   },
   {
     id: 'venom',
-    name: 'VENOM',
+    name: 'Venom',
     blurb: 'Club racing. Fast enough to hurt, slow enough to think.',
     speed: 0.85,
     accel: 0.9,
@@ -40,7 +40,7 @@ export const SPEED_CLASSES: readonly SpeedClass[] = [
   },
   {
     id: 'flash',
-    name: 'FLASH',
+    name: 'Flash',
     blurb: 'League standard. The class the records are set in.',
     speed: 1.0,
     accel: 1.0,
@@ -49,7 +49,7 @@ export const SPEED_CLASSES: readonly SpeedClass[] = [
   },
   {
     id: 'rapier',
-    name: 'RAPIER',
+    name: 'Rapier',
     blurb: 'Open class. Nothing is forgiven at this speed.',
     speed: 1.18,
     accel: 1.12,

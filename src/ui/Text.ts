@@ -1,25 +1,32 @@
 import { CanvasTexture, LinearFilter, Mesh, PlaneGeometry, SRGBColorSpace, Vector2, Vector4 } from 'three';
 import { MeshBasicNodeMaterial } from 'three/webgpu';
 import { color, float, texture as textureNode, uniform, uv } from 'three/tsl';
+import { UI_FONT, UI_WEIGHT } from './Fonts';
 
 export type TextAlign = 'left' | 'centre' | 'right';
 
 export interface TextStyle {
   /** Cap height in layout pixels. */
   size?: number;
-  /** Font weight. The UI uses 200 for display type and 500 for labels. */
+  /** Font weight. Geo has only one, so this is 400 everywhere. */
   weight?: number;
-  /** Extra tracking as a fraction of the size. The UI is set very wide. */
+  /** Extra tracking as a fraction of the size. */
   tracking?: number;
   colour?: number;
   align?: TextAlign;
-  /** Renders uppercase, which everything in this game is. */
+  /**
+   * Forces uppercase. Off by default: the interface is set in sentence case,
+   * and the only things shouted are the ones that are genuinely abbreviations —
+   * constructor tags, nation codes, the wordmark.
+   */
   upper?: boolean;
-  /** Font stack. Defaults to the UI sans. */
+  /** Italic. The display cut, used for headlines and for anything singled out. */
+  italic?: boolean;
+  /** Font stack. Defaults to the UI face. */
   family?: string;
 }
 
-const DEFAULT_FAMILY = "'Segoe UI', 'SF Pro Display', system-ui, sans-serif";
+const DEFAULT_FAMILY = UI_FONT;
 /** Extra canvas pixels around the glyphs so nothing is clipped. */
 const PADDING = 8;
 
@@ -37,19 +44,19 @@ export function renderTextTexture(
   pixelRatio: number,
 ): { texture: CanvasTexture; width: number; height: number } {
   const size = style.size ?? 24;
-  const weight = style.weight ?? 300;
+  const weight = style.weight ?? UI_WEIGHT;
   const tracking = style.tracking ?? 0.18;
   const family = style.family ?? DEFAULT_FAMILY;
-  const text = style.upper === false ? value : value.toUpperCase();
+  const text = style.upper ? value.toUpperCase() : value;
 
   const canvas = document.createElement('canvas');
   const context = canvas.getContext('2d')!;
-  const font = `${weight} ${size}px ${family}`;
+  const font = `${style.italic ? 'italic ' : ''}${weight} ${size}px ${family}`;
 
   context.font = font;
   context.letterSpacing = `${size * tracking}px`;
   const metrics = context.measureText(text);
-  const width = Math.ceil(metrics.width) + PADDING * 2;
+  const width = Math.ceil(metrics.width) + PADDING * 2 + (style.italic ? Math.ceil(size * 0.25) : 0);
   const height = Math.ceil(size * 1.45) + PADDING * 2;
 
   canvas.width = Math.max(1, Math.ceil(width * pixelRatio));

@@ -15,7 +15,7 @@ export type WeaponKind = 'offensive' | 'defensive' | 'utility';
 
 export interface WeaponDef {
   id: WeaponId;
-  /** Full name, shown on pickup. */
+  /** Full name, as shown on pickup. */
   name: string;
   /** Three-letter tag for the HUD. */
   tag: string;
@@ -45,7 +45,7 @@ export interface WeaponDef {
 export const WEAPONS: Record<WeaponId, WeaponDef> = {
   turbo: {
     id: 'turbo',
-    name: 'TURBO',
+    name: 'Turbo',
     tag: 'TRB',
     blurb: 'A hard shove down the straight. Free speed, no risk.',
     kind: 'utility',
@@ -55,7 +55,7 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
   },
   rockets: {
     id: 'rockets',
-    name: 'ROCKETS',
+    name: 'Rockets',
     tag: 'RKT',
     blurb: 'Three unguided rockets. Aim yourself; the track will not help.',
     kind: 'offensive',
@@ -65,7 +65,7 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
   },
   missile: {
     id: 'missile',
-    name: 'HOMING MISSILE',
+    name: 'Homing Missile',
     tag: 'MSL',
     blurb: 'Locks the craft ahead and follows it round the corner.',
     kind: 'offensive',
@@ -75,7 +75,7 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
   },
   mines: {
     id: 'mines',
-    name: 'MINES',
+    name: 'Mines',
     tag: 'MIN',
     blurb: 'Five charges across the road behind you. Defensive, and unkind.',
     kind: 'offensive',
@@ -85,7 +85,7 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
   },
   bomb: {
     id: 'bomb',
-    name: 'PLASMA BOMB',
+    name: 'Plasma Bomb',
     tag: 'BMB',
     blurb: 'One heavy charge with a wide blast. Drop it and drive away.',
     kind: 'offensive',
@@ -95,7 +95,7 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
   },
   plasma: {
     id: 'plasma',
-    name: 'PLASMA BOLT',
+    name: 'Plasma Bolt',
     tag: 'PLS',
     blurb: 'Flat, fast and brutal. Hard to aim, ends a race when it lands.',
     kind: 'offensive',
@@ -105,7 +105,7 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
   },
   quake: {
     id: 'quake',
-    name: 'QUAKE',
+    name: 'Quake',
     tag: 'QKE',
     blurb: 'A shockwave down the road ahead. Everything in the lane is hit.',
     kind: 'offensive',
@@ -115,7 +115,7 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
   },
   shield: {
     id: 'shield',
-    name: 'DEFLECTOR',
+    name: 'Deflector',
     tag: 'SHD',
     blurb: 'Six seconds of nothing touching you.',
     kind: 'defensive',
@@ -125,7 +125,7 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
   },
   autopilot: {
     id: 'autopilot',
-    name: 'AUTOPILOT',
+    name: 'Autopilot',
     tag: 'ATP',
     blurb: 'Hands off. The line is perfect and you cannot steer.',
     kind: 'utility',

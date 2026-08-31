@@ -3,10 +3,7 @@ import { MeshBasicNodeMaterial } from 'three/webgpu';
 import { color, uniform } from 'three/tsl';
 import { TextMesh, panelMaterial } from './Text';
 import { clamp, lerp } from '@/core/math';
-
-const INK = 0xf2f6fa;
-const DIM = 0x76828e;
-const ACCENT = 0x24d4ff;
+import { DARK_UI, type UiPalette } from './Palette';
 
 export interface ListItem {
   /** Line shown in the list. */
@@ -38,17 +35,27 @@ export class ListMenu extends Group {
   readonly rowHeight: number;
   readonly width: number;
 
-  constructor(items: readonly ListItem[], options: { width?: number; rowHeight?: number; pixelRatio?: number } = {}) {
+  private readonly palette: UiPalette;
+
+  constructor(
+    items: readonly ListItem[],
+    options: { width?: number; rowHeight?: number; pixelRatio?: number; palette?: UiPalette } = {},
+  ) {
     super();
     this.width = options.width ?? 460;
     this.rowHeight = options.rowHeight ?? 52;
     const pixelRatio = options.pixelRatio ?? 2;
+    const palette = options.palette ?? DARK_UI;
+    this.palette = palette;
 
-    this.highlight = new Mesh(new PlaneGeometry(this.width, this.rowHeight - 8), panelMaterial(ACCENT, 0.13));
+    this.highlight = new Mesh(
+      new PlaneGeometry(this.width, this.rowHeight - 8),
+      panelMaterial(palette.highlight, palette.highlightAlpha),
+    );
     this.highlight.renderOrder = 1;
     this.add(this.highlight);
 
-    this.rule = new Mesh(new PlaneGeometry(3, this.rowHeight - 14), panelMaterial(ACCENT, 1));
+    this.rule = new Mesh(new PlaneGeometry(3, this.rowHeight - 14), panelMaterial(palette.accent, 1));
     this.rule.renderOrder = 2;
     this.add(this.rule);
 
@@ -56,15 +63,15 @@ export class ListMenu extends Group {
       const group = new Group();
       group.position.y = -i * this.rowHeight;
 
-      const label = new TextMesh(item.label, { size: 22, weight: 300, tracking: 0.26, align: 'left' }, pixelRatio);
+      const label = new TextMesh(item.label, { size: 23, tracking: 0.2, align: 'left' }, pixelRatio);
       label.position.set(24, 0, 0);
       group.add(label);
 
       let detail: TextMesh | null = null;
       if (item.detail) {
-        detail = new TextMesh(item.detail, { size: 13, weight: 500, tracking: 0.3, align: 'right' }, pixelRatio);
+        detail = new TextMesh(item.detail, { size: 13, tracking: 0.26, align: 'right' }, pixelRatio);
         detail.position.set(this.width - 20, 0, 0);
-        detail.setColour(DIM);
+        detail.setColour(palette.dim);
         group.add(detail);
       }
 
@@ -111,9 +118,9 @@ export class ListMenu extends Group {
       const nearness = clamp(1 - Math.abs(i - shown), 0, 1);
       row.group.position.x = lerp(0, 14, nearness);
       const selected = i === this.index;
-      row.label.setColour(row.locked ? 0x49525b : selected ? INK : DIM, 1);
-      row.label.setOpacity(row.locked ? 0.5 : lerp(0.72, 1, nearness));
-      row.detail?.setOpacity(lerp(0.55, 1, nearness));
+      row.label.setColour(row.locked ? this.palette.muted : selected ? this.palette.ink : this.palette.dim, 1);
+      row.label.setOpacity(row.locked ? 0.55 : lerp(0.88, 1, nearness));
+      row.detail?.setOpacity(lerp(0.78, 1, nearness));
     });
   }
 
@@ -146,22 +153,26 @@ export class StatBar extends Group {
   private shown = 0;
   private target = 0;
 
-  constructor(name: string, options: { segments?: number; width?: number; pixelRatio?: number } = {}) {
+  constructor(
+    name: string,
+    options: { segments?: number; width?: number; pixelRatio?: number; palette?: UiPalette } = {},
+  ) {
     super();
     const count = options.segments ?? 5;
     const width = options.width ?? 150;
     const gap = 4;
     const segmentWidth = (width - gap * (count - 1)) / count;
+    const palette = options.palette ?? DARK_UI;
 
-    this.label = new TextMesh(name, { size: 11, weight: 500, tracking: 0.34, align: 'left' }, options.pixelRatio ?? 2);
-    this.label.setColour(DIM);
+    this.label = new TextMesh(name, { size: 11, tracking: 0.34, align: 'left' }, options.pixelRatio ?? 2);
+    this.label.setColour(palette.dim);
     this.label.position.set(0, 14, 0);
     this.add(this.label);
 
     for (let i = 0; i < count; i++) {
       const opacity = uniform(0.16);
       const material = new MeshBasicNodeMaterial();
-      material.colorNode = color(ACCENT);
+      material.colorNode = color(palette.accent);
       material.opacityNode = opacity;
       material.transparent = true;
       material.depthTest = false;

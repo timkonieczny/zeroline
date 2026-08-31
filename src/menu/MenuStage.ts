@@ -1,18 +1,23 @@
 import {
+  BackSide,
+  Color,
   CylinderGeometry,
-  FogExp2,
+  DirectionalLight,
+  Fog,
   Group,
   Mesh,
   OrthographicCamera,
   PerspectiveCamera,
   PlaneGeometry,
-  PointLight,
   Scene,
+  SphereGeometry,
   SpotLight,
   Vector3,
+  type Texture,
 } from 'three';
-import { MeshStandardNodeMaterial } from 'three/webgpu';
-import { color, float, fract, mix, oneMinus, smoothstep, time, uv } from 'three/tsl';
+import { MeshStandardNodeMaterial, PMREMGenerator, type WebGPURenderer } from 'three/webgpu';
+import { color, float, fract, mix, mul, oneMinus, positionLocal, reflector, smoothstep, time, uv, vec3 } from 'three/tsl';
+import { LIGHT_UI } from '@/ui/Palette';
 import { TextMesh, panelMaterial } from '@/ui/Text';
 import { ListMenu, StatBar } from '@/ui/Widgets';
 import { OptionList, type OptionRow } from '@/ui/OptionList';
@@ -35,9 +40,12 @@ export interface MenuSelection {
 }
 
 const MARGIN = 74;
-const INK = 0xf2f6fa;
-const DIM = 0x76828e;
-const ACCENT = 0x24d4ff;
+const UI = LIGHT_UI;
+
+/** The showroom's walls and haze. */
+const ROOM_WHITE = 0xeef3f7;
+/** How much of the floor is mirror, at the plinth. Falls off with distance. */
+const FLOOR_MIRROR = 0.42;
 
 /**
  * Where the plinth stands. Off to the right so the type, which is set flush
@@ -52,13 +60,15 @@ const PLINTH = new Vector3(9, 0, 0);
 const STATIONS: Record<MenuScreen, { position: [number, number, number]; look: [number, number, number]; fov: number }> = {
   // The look targets sit left of the plinth on purpose: aiming straight at it
   // would centre the craft, and the type is set flush left.
-  title: { position: [10, 4.0, 15], look: [-5.5, 2.4, 0], fov: 40 },
-  main: { position: [8, 3.4, 13], look: [-4.5, 2.2, 0], fov: 42 },
-  track: { position: [7, 6.5, 12], look: [-4.5, 1.8, 0], fov: 44 },
-  craft: { position: [0.5, 2.6, 11], look: [-3.4, 2.3, 0], fov: 34 },
-  class: { position: [5, 3.0, 12], look: [-4, 2.3, 0], fov: 38 },
-  controls: { position: [9, 3.6, 14], look: [-4.5, 2.3, 0], fov: 44 },
-  settings: { position: [9, 5.2, 14], look: [-4.5, 2.6, 0], fov: 44 },
+  title: { position: [11, 4.2, 16], look: [-8, 2.4, 0], fov: 38 },
+  main: { position: [8, 3.4, 13], look: [-5.5, 2.2, 0], fov: 42 },
+  track: { position: [7, 6.5, 12], look: [-5.5, 1.8, 0], fov: 44 },
+  // Far enough back that the hull sits in the right third rather than crossing
+  // the stat panel, which it did when this station was framed for a dark room.
+  craft: { position: [4.5, 3.2, 18], look: [-7, 2.3, 0], fov: 30 },
+  class: { position: [5, 3.0, 12], look: [-4.6, 2.3, 0], fov: 38 },
+  controls: { position: [9, 3.6, 14], look: [-5.5, 2.3, 0], fov: 44 },
+  settings: { position: [9, 5.2, 14], look: [-5.5, 2.6, 0], fov: 44 },
 };
 
 const TRACKS: readonly TrackDefinition[] = [meridianCoast];
@@ -96,6 +106,10 @@ export class MenuStage {
   screen: MenuScreen = 'title';
 
   private readonly plinth: Group;
+  /** Planar reflection of the room, mixed into the floor. */
+  private readonly mirror: ReturnType<typeof reflector>;
+  /** Image-based lighting probe, so the craft has something to reflect. */
+  private environmentMap: Texture | null = null;
   private readonly craftHolder = new Group();
   private craftModel: GliderModel | null = null;
   private craftSpin = 0;
@@ -138,12 +152,26 @@ export class MenuStage {
   constructor(pixelRatio: number, private readonly settingRows: readonly OptionRow[] = []) {
     this.pixelRatio = pixelRatio;
 
-    // --- Hangar ---------------------------------------------------------
-    // Fog rather than a backdrop: the hangar has no far wall, it just stops
-    // existing, which is both cheaper and more convincing than painting one.
-    this.scene.fog = new FogExp2(0x05080b, 0.021);
+    // --- Showroom -------------------------------------------------------
+    // Linear fog to white rather than exponential to black: the room has no
+    // far wall, and everything simply dissolves into the light.
+    this.scene.fog = new Fog(ROOM_WHITE, 46, 190);
 
-    const floor = new Mesh(new PlaneGeometry(400, 400), MenuStage.floorMaterial());
+    // A graded backdrop rather than a flat fill. On a white set a white craft
+    // has no edge anywhere; the floor needs to sit a few stops under the
+    // ceiling for the silhouette to read at all.
+    const backdrop = new Mesh(new SphereGeometry(220, 32, 20), MenuStage.backdropMaterial());
+    backdrop.frustumCulled = false;
+    this.scene.add(backdrop);
+
+    // A planar reflection of the whole scene, which is what puts the craft
+    // back on the floor underneath itself. Half resolution: it is a soft,
+    // heavily tinted reflection and nobody will count its pixels.
+    this.mirror = reflector({ resolutionScale: 0.5 });
+    this.mirror.target.rotateX(-Math.PI / 2);
+    this.scene.add(this.mirror.target);
+
+    const floor = new Mesh(new PlaneGeometry(400, 400), MenuStage.floorMaterial(this.mirror));
     floor.rotation.x = -Math.PI / 2;
     floor.receiveShadow = true;
 
@@ -160,52 +188,61 @@ export class MenuStage {
     this.craftHolder.scale.setScalar(1.25);
     this.plinth.add(this.craftHolder);
 
-    const key = new SpotLight(0xffffff, 850, 70, 0.5, 0.5, 1.6);
-    key.position.copy(PLINTH).add(new Vector3(7, 14, 8));
+    // A hard key for the shadow under the craft, and a broad directional
+    // fill so nothing on a white set falls into darkness.
+    const key = new SpotLight(0xffffff, 900, 90, 0.62, 0.55, 1.4);
+    key.position.copy(PLINTH).add(new Vector3(8, 16, 9));
     key.target.position.copy(PLINTH).setY(2);
     key.castShadow = true;
     key.shadow.mapSize.set(2048, 2048);
     key.shadow.bias = -0.0008;
 
-    const rim = new SpotLight(ACCENT, 260, 60, 0.7, 0.6, 1.6);
-    rim.position.copy(PLINTH).add(new Vector3(-10, 6, -8));
-    rim.target.position.copy(PLINTH).setY(2);
+    const fill = new DirectionalLight(0xffffff, 0.85);
+    fill.position.copy(PLINTH).add(new Vector3(-9, 7, 12));
 
-    const fill = new PointLight(0x4b6a8a, 110, 70, 2);
-    fill.position.copy(PLINTH).add(new Vector3(-6, 8, 12));
+    const back = new DirectionalLight(new Color(UI.accent), 0.55);
+    back.position.copy(PLINTH).add(new Vector3(-8, 5, -12));
 
-    this.scene.add(floor, this.plinth, key, key.target, rim, rim.target, fill);
-    this.scene.add(MenuStage.buildStripLights());
+    this.scene.add(floor, this.plinth, key, key.target, fill, back);
+    this.scene.add(MenuStage.buildSoftboxes());
 
     // --- Overlay --------------------------------------------------------
-    const t = (text: string, size: number, weight: number, tracking: number, align: 'left' | 'right' | 'centre') =>
-      new TextMesh(text, { size, weight, tracking, align }, pixelRatio);
+    const t = (
+      text: string,
+      size: number,
+      tracking: number,
+      align: 'left' | 'right' | 'centre',
+      italic = false,
+    ) => new TextMesh(text, { size, tracking, align, italic }, pixelRatio);
 
-    this.wordmark = t('ZEROLINE', 92, 200, 0.44, 'left');
-    this.tagline = t('anti-gravity racing league · season 47', 13, 500, 0.42, 'left');
-    this.pressStart = t('press enter or A to begin', 14, 500, 0.4, 'left');
-    this.tagline.setColour(DIM);
-    this.pressStart.setColour(ACCENT);
+    this.wordmark = t('ZEROLINE', 96, 0.4, 'left', true);
+    this.tagline = t('Anti-gravity racing league · Season 47', 13, 0.36, 'left');
+    this.pressStart = t('Press Enter or A to begin', 14, 0.34, 'left');
+    this.wordmark.setColour(UI.ink);
+    this.tagline.setColour(UI.ink);
+    this.pressStart.setColour(UI.accent);
 
-    this.breadcrumb = t('', 12, 500, 0.46, 'left');
-    this.breadcrumb.setColour(DIM);
-    this.hint = t('', 11, 500, 0.4, 'right');
-    this.hint.setColour(DIM);
+    this.breadcrumb = t('', 12, 0.4, 'left');
+    this.breadcrumb.setColour(UI.ink);
+    this.hint = t('', 11, 0.36, 'right');
+    this.hint.setColour(UI.dim);
 
-    this.craftName = t('', 34, 250, 0.24, 'left');
-    this.craftNation = t('', 12, 500, 0.44, 'left');
-    this.craftBlurb = t('', 13, 300, 0.04, 'left');
-    this.craftNation.setColour(ACCENT);
-    this.craftBlurb.setColour(0xb6c1cb);
+    this.craftName = t('', 36, 0.18, 'left', true);
+    this.craftNation = new TextMesh('', { size: 12, tracking: 0.44, align: 'left', upper: true }, pixelRatio);
+    this.craftBlurb = t('', 14, 0.04, 'left');
+    this.craftName.setColour(UI.ink);
+    this.craftNation.setColour(UI.accent);
+    this.craftBlurb.setColour(UI.ink);
 
-    this.trackTitle = t('', 40, 250, 0.22, 'left');
-    this.trackSubtitle = t('', 13, 500, 0.44, 'left');
-    this.trackFacts = t('', 14, 400, 0.16, 'left');
-    this.trackSubtitle.setColour(ACCENT);
-    this.trackFacts.setColour(0xb6c1cb);
+    this.trackTitle = t('', 42, 0.16, 'left', true);
+    this.trackSubtitle = t('', 13, 0.4, 'left');
+    this.trackFacts = t('', 14, 0.12, 'left');
+    this.trackTitle.setColour(UI.ink);
+    this.trackSubtitle.setColour(UI.accent);
+    this.trackFacts.setColour(UI.ink);
 
-    this.classBlurb = t('', 13, 300, 0.04, 'left');
-    this.classBlurb.setColour(0xb6c1cb);
+    this.classBlurb = t('', 14, 0.04, 'left');
+    this.classBlurb.setColour(UI.ink);
 
     this.overlay.add(this.breadcrumb, this.hint);
     this.buildPanels();
@@ -222,12 +259,12 @@ export class MenuStage {
 
     const mainList = new ListMenu(
       [
-        { label: 'race', detail: 'eight craft · three laps' },
-        { label: 'time trial', detail: 'solo · best lap' },
-        { label: 'settings', detail: 'quality · audio' },
-        { label: 'controls', detail: 'keyboard · gamepad' },
+        { label: 'Race', detail: 'Eight craft · three laps' },
+        { label: 'Time trial', detail: 'Solo · best lap' },
+        { label: 'Settings', detail: 'Quality · audio' },
+        { label: 'Controls', detail: 'Keyboard · gamepad' },
       ],
-      { pixelRatio: this.pixelRatio, width: 480 },
+      { pixelRatio: this.pixelRatio, width: 480, palette: UI },
     );
     const mainPanel = new Group();
     mainPanel.add(mainList);
@@ -236,7 +273,7 @@ export class MenuStage {
 
     const trackList = new ListMenu(
       TRACKS.map((track) => ({ label: track.name, detail: track.subtitle })),
-      { pixelRatio: this.pixelRatio, width: 480 },
+      { pixelRatio: this.pixelRatio, width: 480, palette: UI },
     );
     const trackPanel = new Group();
     trackPanel.add(trackList, this.trackTitle, this.trackSubtitle, this.trackFacts);
@@ -245,12 +282,12 @@ export class MenuStage {
 
     const craftList = new ListMenu(
       TEAMS.map((team) => ({ label: team.name, detail: team.nation })),
-      { pixelRatio: this.pixelRatio, width: 420 },
+      { pixelRatio: this.pixelRatio, width: 420, palette: UI },
     );
     const craftPanel = new Group();
     craftPanel.add(craftList, this.craftName, this.craftNation, this.craftBlurb);
-    for (const name of ['speed', 'thrust', 'handling', 'shield']) {
-      const bar = new StatBar(name, { pixelRatio: this.pixelRatio, width: 210 });
+    for (const name of ['Speed', 'Thrust', 'Handling', 'Shield']) {
+      const bar = new StatBar(name, { pixelRatio: this.pixelRatio, width: 210, palette: UI });
       this.statBars.push(bar);
       craftPanel.add(bar);
     }
@@ -262,7 +299,7 @@ export class MenuStage {
         label: speedClass.name,
         detail: `${Math.round(145 * speedClass.speed * 3.6)} km/h`,
       })),
-      { pixelRatio: this.pixelRatio, width: 480 },
+      { pixelRatio: this.pixelRatio, width: 480, palette: UI },
     );
     classList.select(2);
     const classPanel = new Group();
@@ -272,25 +309,30 @@ export class MenuStage {
 
     const controlsPanel = new Group();
     const rows = [
-      'thrust                W  ·  right trigger',
-      'steer                 A D  ·  left stick',
-      'airbrakes             Q E  ·  bumpers',
-      'sideshift             double-tap an airbrake',
-      'barrel roll           double-tap, airborne',
-      'fire                  space  ·  A',
-      'absorb weapon         shift  ·  B',
-      'look back             C  ·  left trigger',
-      'pause                 esc  ·  start',
+      'Thrust                W  ·  right trigger',
+      'Steer                 A D  ·  left stick',
+      'Airbrakes             Q E  ·  bumpers',
+      'Sideshift             double-tap an airbrake',
+      'Barrel roll           double-tap, airborne',
+      'Fire                  Space  ·  A',
+      'Absorb weapon         Shift  ·  B',
+      'Look back             C  ·  left trigger',
+      'Hide results          Tab  ·  Y',
+      'Pause                 Esc  ·  Start',
     ];
     rows.forEach((row, i) => {
-      const line = new TextMesh(row, { size: 15, weight: 400, tracking: 0.16, align: 'left' }, this.pixelRatio);
+      const line = new TextMesh(row, { size: 15, tracking: 0.12, align: 'left' }, this.pixelRatio);
       line.position.y = -i * 30;
-      line.setColour(i % 2 === 0 ? INK : 0xb6c1cb);
+      line.setColour(i % 2 === 0 ? UI.ink : UI.dim);
       controlsPanel.add(line);
     });
     this.panels.set('controls', controlsPanel);
 
-    this.settingsList = new OptionList(this.settingRows, { pixelRatio: this.pixelRatio, width: 520 });
+    this.settingsList = new OptionList(this.settingRows, {
+      pixelRatio: this.pixelRatio,
+      width: 520,
+      palette: UI,
+    });
     this.settingsList.onChange = (row) => this.onSettingChanged?.(row);
     const settingsPanel = new Group();
     settingsPanel.add(this.settingsList);
@@ -312,24 +354,24 @@ export class MenuStage {
 
     const trail: Record<MenuScreen, string> = {
       title: '',
-      main: 'zeroline',
-      track: 'zeroline / circuit',
-      craft: 'zeroline / circuit / craft',
-      class: 'zeroline / circuit / craft / class',
-      controls: 'zeroline / controls',
-      settings: 'zeroline / settings',
+      main: 'Zeroline',
+      track: 'Zeroline / Circuit',
+      craft: 'Zeroline / Circuit / Craft',
+      class: 'Zeroline / Circuit / Craft / Class',
+      controls: 'Zeroline / Controls',
+      settings: 'Zeroline / Settings',
     };
     this.breadcrumb.setText(trail[screen]);
     this.breadcrumb.visible = screen !== 'title';
 
     const hints: Record<MenuScreen, string> = {
       title: '',
-      main: 'enter select',
-      track: 'enter select   ·   esc back',
-      craft: 'enter select   ·   esc back',
-      class: 'enter start   ·   esc back',
-      controls: 'esc back',
-      settings: 'left right adjust   ·   esc back',
+      main: 'Enter select',
+      track: 'Enter select   ·   Esc back',
+      craft: 'Enter select   ·   Esc back',
+      class: 'Enter start   ·   Esc back',
+      controls: 'Esc back',
+      settings: 'Left right adjust   ·   Esc back',
     };
     this.hint.setText(hints[screen]);
     this.hint.visible = screen !== 'title';
@@ -431,7 +473,7 @@ export class MenuStage {
       this.trackTitle.setText(track.name);
       this.trackSubtitle.setText(`${track.subtitle} · ${track.region}`);
       const laps = `${track.laps} lap${track.laps === 1 ? '' : 's'}`;
-      this.trackFacts.setText(`${track.corners.length} corners · ${laps} · sea level start`);
+      this.trackFacts.setText(`${track.corners.length} corners · ${laps} · Sea level start`);
       this.layout();
     } else if (this.screen === 'class') {
       this.classBlurb.setText(SPEED_CLASSES[list.index]!.blurb);
@@ -460,6 +502,17 @@ export class MenuStage {
   }
 
   // --- Layout and animation --------------------------------------------
+
+  /**
+   * Builds the lighting probe. Needs a live renderer, so it cannot happen in
+   * the constructor.
+   */
+  attachRenderer(renderer: WebGPURenderer): void {
+    if (this.environmentMap) return;
+    this.environmentMap = this.buildEnvironment(renderer);
+    this.scene.environment = this.environmentMap;
+    this.scene.environmentIntensity = 0.55;
+  }
 
   resize(width: number, height: number, pixelRatio: number): void {
     this.width = width;
@@ -498,7 +551,7 @@ export class MenuStage {
 
     // Track detail sits to the right of its list, and close enough to it that
     // the longest constructor blurb still fits on a 16:9 screen.
-    const detailX = left + 520;
+    const detailX = left + 470;
     this.trackTitle.position.set(detailX, listTop + 6, 0);
     this.trackSubtitle.position.set(detailX, listTop - 34, 0);
     this.trackFacts.position.set(detailX, listTop - 70, 0);
@@ -559,6 +612,7 @@ export class MenuStage {
   }
 
   dispose(): void {
+    this.environmentMap?.dispose();
     this.craftModel?.dispose();
     this.settingsList?.dispose();
     for (const list of this.lists.values()) list.dispose();
@@ -567,26 +621,33 @@ export class MenuStage {
 
   // --- Materials --------------------------------------------------------
 
-  /** Dark polished floor with a faint grid, fading out with distance. */
-  private static floorMaterial(): MeshStandardNodeMaterial {
+  /**
+   * Polished white floor with a faint grid and the room reflected in it.
+   *
+   * The reflection is mixed in rather than used as the colour, and it falls
+   * away with distance from the plinth: a full mirror to the horizon reads as
+   * a bug, and a showroom floor is polished, not wet.
+   */
+  private static floorMaterial(mirror: ReturnType<typeof reflector>): MeshStandardNodeMaterial {
     const material = new MeshStandardNodeMaterial();
-    const grid = uv().mul(40);
-    const lineX = smoothstep(float(0.02), float(0), fract(grid.x).sub(0.5).abs().oneMinus().sub(0.98));
-    const lineY = smoothstep(float(0.02), float(0), fract(grid.y).sub(0.5).abs().oneMinus().sub(0.98));
-    const fade = smoothstep(float(0.5), float(0.06), uv().sub(0.5).length());
-    material.colorNode = mix(color(0x070a0d), color(0x121a21), lineX.add(lineY).mul(fade));
-    // Rougher and less metallic than a showroom floor would really be: a mirror
-    // here catches the key light and blows a hole in the middle of the frame.
-    material.roughnessNode = float(0.42);
-    material.metalnessNode = float(0.4);
+    const grid = uv().mul(80);
+    const lineX = smoothstep(float(0.02), float(0), fract(grid.x).sub(0.5).abs().oneMinus().sub(0.985));
+    const lineY = smoothstep(float(0.02), float(0), fract(grid.y).sub(0.5).abs().oneMinus().sub(0.985));
+    const radius = uv().sub(0.5).length();
+    const near = smoothstep(float(0.06), float(0.012), radius);
+
+    const base = mix(color(0xd7dfe6), color(0xbcc7d0), lineX.add(lineY).mul(smoothstep(float(0.2), float(0.01), radius)));
+    material.colorNode = mix(base, mirror.rgb, mul(near, float(FLOOR_MIRROR)));
+    material.roughnessNode = float(0.3);
+    material.metalnessNode = float(0.1);
     return material;
   }
 
   private static plinthMaterial(): MeshStandardNodeMaterial {
     const material = new MeshStandardNodeMaterial();
-    material.colorNode = color(0x161d23);
-    material.roughnessNode = float(0.3);
-    material.metalnessNode = float(0.85);
+    material.colorNode = color(0xaeb9c3);
+    material.roughnessNode = float(0.22);
+    material.metalnessNode = float(0.45);
     return material;
   }
 
@@ -594,29 +655,103 @@ export class MenuStage {
   private static ringMaterial(): MeshStandardNodeMaterial {
     const material = new MeshStandardNodeMaterial();
     const chase = fract(uv().x.mul(3).sub(time.mul(0.18)));
-    material.colorNode = color(0x0a1216);
+    material.colorNode = color(0x9fb0bd);
     // Restrained on purpose. This ring sits under the bloom threshold's knee,
     // and an earlier, brighter version flooded the whole frame with cyan.
-    material.emissiveNode = color(ACCENT).mul(smoothstep(float(0.55), float(0.05), chase)).mul(1.15);
+    material.emissiveNode = color(UI.accent).mul(smoothstep(float(0.55), float(0.05), chase)).mul(0.9);
     material.roughnessNode = float(0.4);
     return material;
   }
 
-  /** Two runs of ceiling strip lights, receding into the dark. */
-  private static buildStripLights(): Group {
+  /**
+   * Overhead softboxes.
+   *
+   * These are the light sources the craft actually reflects — big, soft,
+   * rectangular highlights sliding across the hull as it turns, which is what
+   * a photographed car looks like and what an environment map alone cannot
+   * give you. They are emissive geometry, so they show up in the floor's
+   * reflection as well.
+   */
+  private static buildSoftboxes(): Group {
     const group = new Group();
     const material = new MeshStandardNodeMaterial();
-    material.colorNode = color(0x0b0f13);
-    material.emissiveNode = color(0xdfefff).mul(oneMinus(uv().y.sub(0.5).abs().mul(2)).mul(3.2));
-    for (let i = 0; i < 8; i++) {
+    material.colorNode = color(0xffffff);
+    // Brightest along the middle of the panel and softer at its edges.
+    const across = oneMinus(uv().y.sub(0.5).abs().mul(2));
+    material.emissiveNode = color(0xffffff).mul(smoothstep(float(0), float(0.45), across)).mul(3.2);
+    material.fog = false;
+
+    for (let i = 0; i < 5; i++) {
       for (const side of [-1, 1]) {
-        const strip = new Mesh(new PlaneGeometry(0.55, 13), material);
-        strip.position.set(side * 11, 9.5, -6 - i * 7);
-        strip.rotation.x = Math.PI / 2;
-        group.add(strip);
+        const panel = new Mesh(new PlaneGeometry(2.6, 15), material);
+        panel.position.set(PLINTH.x + side * 9, 12.5, 4 - i * 11);
+        panel.rotation.x = Math.PI / 2;
+        group.add(panel);
       }
     }
     return group;
+  }
+
+  /**
+   * A studio probe for the craft to reflect.
+   *
+   * Built from its own throwaway scene rather than from the showroom, because
+   * pre-filtering the showroom would bake the craft on the plinth into the
+   * reflections of the craft on the plinth.
+   */
+  private buildEnvironment(renderer: WebGPURenderer): Texture {
+    const studio = new Scene();
+
+    const dome = new Mesh(new SphereGeometry(60, 24, 16), MenuStage.studioDomeMaterial());
+    studio.add(dome);
+
+    const boxMaterial = new MeshStandardNodeMaterial();
+    boxMaterial.colorNode = vec3(0, 0, 0);
+    boxMaterial.emissiveNode = color(0xffffff).mul(7);
+    for (let i = 0; i < 4; i++) {
+      const angle = (i / 4) * Math.PI * 2 + 0.4;
+      const panel = new Mesh(new PlaneGeometry(16, 5), boxMaterial);
+      panel.position.set(Math.cos(angle) * 20, 14, Math.sin(angle) * 20);
+      panel.lookAt(0, 2, 0);
+      studio.add(panel);
+    }
+
+    const pmrem = new PMREMGenerator(renderer);
+    const texture = pmrem.fromScene(studio, 0, 1, 120).texture;
+    pmrem.dispose();
+    dome.geometry.dispose();
+    return texture;
+  }
+
+  /**
+   * The room itself: bright ceiling, mid-grey at floor level.
+   *
+   * Drawn as an unlit dome rather than a background colour so there is a
+   * gradient behind the craft. A flat white fill leaves a white craft with no
+   * silhouette, which is exactly what the first version of this looked like.
+   */
+  private static backdropMaterial(): MeshStandardNodeMaterial {
+    const material = new MeshStandardNodeMaterial();
+    const height = positionLocal.normalize().y;
+    material.colorNode = vec3(0, 0, 0);
+    material.emissiveNode = mix(
+      color(0xb4c0ca),
+      color(0xf6f9fb),
+      smoothstep(float(-0.25), float(0.55), height),
+    );
+    material.side = BackSide;
+    material.fog = false;
+    return material;
+  }
+
+  /** Bright above, slightly grey below: a softbox tent. */
+  private static studioDomeMaterial(): MeshStandardNodeMaterial {
+    const material = new MeshStandardNodeMaterial();
+    const height = positionLocal.normalize().y;
+    material.colorNode = vec3(0, 0, 0);
+    material.emissiveNode = mix(color(0x9fadb8), color(0xffffff), smoothstep(float(-0.4), float(0.5), height));
+    material.side = BackSide;
+    return material;
   }
 }
 

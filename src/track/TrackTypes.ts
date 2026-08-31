@@ -31,9 +31,9 @@ export interface SceneryDistrict extends LapRange {
 
 export interface TrackDefinition {
   id: string;
-  /** Display name, shown uppercase in menus. */
+  /** Display name, as set in the menus. */
   name: string;
-  /** Circuit designation, e.g. "CIRCUIT 01". */
+  /** Circuit designation, e.g. "Circuit 01". */
   subtitle: string;
   /** Two-letter region tag used in the results table. */
   region: string;

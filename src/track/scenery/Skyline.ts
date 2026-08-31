@@ -1,6 +1,6 @@
 import { BoxGeometry, Color, Group, InstancedMesh, Object3D, Vector3 } from 'three';
 import { MeshStandardNodeMaterial } from 'three/webgpu';
-import { color, float, fract, instanceIndex, mix, sin, smoothstep, step, uv, vec3 } from 'three/tsl';
+import { color, float, floor, fract, instanceIndex, mix, sin, smoothstep, step, uv, vec3 } from 'three/tsl';
 import type { Track } from '../Track';
 import type { SceneryTheme } from '../TrackTypes';
 import { Rng } from '@/core/Rng';
@@ -10,6 +10,11 @@ import { lerp } from '@/core/math';
 const STRIDE = 26;
 /** Instances reserved for the skyline. */
 const CAPACITY = 900;
+/** Windows across and up a facade. Scaled by the box's UV, so it is per-face. */
+const WINDOWS_ACROSS = 7;
+const WINDOWS_UP = 16;
+/** A window is lit when its hash lands above this. */
+const LIT_FRACTION = 0.72;
 
 interface ThemeRule {
   /** Chance a building is placed at all, per side per stride. */
@@ -123,28 +128,38 @@ export class Skyline {
   }
 
   /**
-   * Concrete with horizontal window bands.
+   * Concrete with a grid of windows, some of them lit.
    *
-   * The lit-window pattern is a cheap hash of the instance index crossed with the
-   * facade coordinate, so every building gets a different set of lights without
-   * a texture and without a single byte of per-instance data beyond its colour.
+   * The hash has to be taken on the *cell* the pixel falls in, not on the pixel.
+   * Feeding a continuous UV into a `fract(sin(...))` hash is a white-noise
+   * generator — an earlier version did exactly that and every facade came out
+   * looking like an untuned television. Flooring the scaled UV first gives one
+   * random value per window, which is what makes it read as a building.
    */
   private static material(): MeshStandardNodeMaterial {
     const material = new MeshStandardNodeMaterial();
     const seed = instanceIndex.toFloat();
 
-    const floors = fract(uv().y.mul(14));
-    const band = smoothstep(float(0.62), float(0.5), floors).mul(smoothstep(float(0.14), float(0.26), floors));
-    const bays = fract(uv().x.mul(9));
-    const bay = smoothstep(float(0.7), float(0.55), bays);
+    const grid = uv().mul(vec3(WINDOWS_ACROSS, WINDOWS_UP, 1).xy);
+    const cell = floor(grid);
+    const within = fract(grid);
 
-    // Pseudo-random per window: a large-irrational product folded into 0..1.
-    const noise = fract(sin(seed.mul(12.9898).add(uv().y.mul(78.233)).add(uv().x.mul(37.719))).mul(43758.5453));
-    const lit = step(float(0.62), noise).mul(band).mul(bay);
+    // The window itself: a rectangle inset within its cell, leaving the mullion.
+    const pane = smoothstep(float(0.12), float(0.2), within.x)
+      .mul(smoothstep(float(0.88), float(0.8), within.x))
+      .mul(smoothstep(float(0.2), float(0.3), within.y))
+      .mul(smoothstep(float(0.82), float(0.72), within.y));
 
-    material.colorNode = mix(vec3(0.86, 0.87, 0.89), vec3(0.16, 0.2, 0.24), band.mul(0.8));
-    material.emissiveNode = color(0xfff0d4).mul(lit).mul(0.9);
-    material.roughnessNode = mix(float(0.72), float(0.18), band);
+    // One value per window, per building.
+    const hash = fract(sin(cell.x.mul(12.9898).add(cell.y.mul(78.233)).add(seed.mul(37.719))).mul(43758.5453));
+    const lit = step(float(LIT_FRACTION), hash).mul(pane);
+
+    // Gentle: glass is a little darker than the concrete around it, not a hole.
+    // A hard pane-to-wall contrast turns a facade into a checkerboard, which is
+    // as wrong as the noise it replaced.
+    material.colorNode = mix(vec3(0.9, 0.91, 0.93), vec3(0.62, 0.67, 0.72), pane.mul(0.8));
+    material.emissiveNode = color(0xfff2dc).mul(lit).mul(0.3);
+    material.roughnessNode = mix(float(0.74), float(0.2), pane);
     material.metalnessNode = float(0.05);
     material.vertexColors = true;
     return material;

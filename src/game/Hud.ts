@@ -99,17 +99,17 @@ export class Hud {
     this.minimap = new Minimap(track, fieldSize);
     this.root.add(this.minimap.group);
 
-    this.speedValue = new TextMesh('0', { size: 78, weight: 200, tracking: 0.02, align: 'right' }, pixelRatio);
-    this.speedUnit = new TextMesh('km/h', { size: 15, weight: 500, tracking: 0.42, align: 'right' }, pixelRatio);
-    this.positionValue = new TextMesh('1', { size: 82, weight: 200, tracking: 0.02, align: 'left' }, pixelRatio);
-    this.positionOf = new TextMesh('/ 8', { size: 17, weight: 400, tracking: 0.3, align: 'left' }, pixelRatio);
-    this.lapLabel = new TextMesh('lap', { size: 13, weight: 500, tracking: 0.42, align: 'left' }, pixelRatio);
-    this.lapValue = new TextMesh('1 / 3', { size: 26, weight: 300, tracking: 0.14, align: 'left' }, pixelRatio);
-    this.timeValue = new TextMesh('0:00.000', { size: 30, weight: 250, tracking: 0.08, align: 'right' }, pixelRatio);
-    this.bestLabel = new TextMesh('best --:--.---', { size: 13, weight: 500, tracking: 0.28, align: 'right' }, pixelRatio);
-    this.weaponName = new TextMesh('', { size: 24, weight: 300, tracking: 0.28, align: 'centre' }, pixelRatio);
-    this.weaponHint = new TextMesh('space fire · shift absorb', { size: 11, weight: 500, tracking: 0.3, align: 'centre' }, pixelRatio);
-    this.centreMessage = new TextMesh('', { size: 96, weight: 200, tracking: 0.24, align: 'centre' }, pixelRatio);
+    this.speedValue = new TextMesh('0', { size: 80, tracking: 0.02, align: 'right', italic: true }, pixelRatio);
+    this.speedUnit = new TextMesh('km/h', { size: 15, tracking: 0.42, align: 'right' }, pixelRatio);
+    this.positionValue = new TextMesh('1', { size: 84, tracking: 0.02, align: 'left', italic: true }, pixelRatio);
+    this.positionOf = new TextMesh('/ 8', { size: 17, tracking: 0.3, align: 'left' }, pixelRatio);
+    this.lapLabel = new TextMesh('Lap', { size: 13, tracking: 0.42, align: 'left' }, pixelRatio);
+    this.lapValue = new TextMesh('1 / 3', { size: 26, tracking: 0.14, align: 'left' }, pixelRatio);
+    this.timeValue = new TextMesh('0:00.000', { size: 30, tracking: 0.08, align: 'right' }, pixelRatio);
+    this.bestLabel = new TextMesh('Best --:--.---', { size: 13, tracking: 0.28, align: 'right' }, pixelRatio);
+    this.weaponName = new TextMesh('', { size: 24, tracking: 0.24, align: 'centre', italic: true }, pixelRatio);
+    this.weaponHint = new TextMesh('Space fire · Shift absorb', { size: 11, tracking: 0.3, align: 'centre' }, pixelRatio);
+    this.centreMessage = new TextMesh('', { size: 100, tracking: 0.2, align: 'centre', italic: true }, pixelRatio);
 
     this.positionValue.setColour(INK);
     this.positionOf.setColour(DIM);
@@ -192,8 +192,12 @@ export class Hud {
   private layout(): void {
     const { width, height } = this;
 
-    // Top centre, clear of the lap counter and the race clock.
-    this.minimap.group.position.set(width / 2, height - MARGIN - this.minimap.extent.y / 2 - 8, 0);
+    // Top right, below the clock and the best-lap line.
+    this.minimap.group.position.set(
+      width - MARGIN - this.minimap.extent.x / 2,
+      height - MARGIN - 74 - this.minimap.extent.y / 2,
+      0,
+    );
 
     const scrimHeight = Math.min(230, height * 0.3);
     this.scrimTop.scale.set(width, scrimHeight, 1);
@@ -251,7 +255,7 @@ export class Hud {
     this.lapValue.setText(`${Math.min(race.setup.laps, player.lap + 1)} / ${race.setup.laps}`);
 
     this.timeValue.setText(formatTime(Math.max(0, race.time)));
-    this.bestLabel.setText(`best ${formatTime(player.bestLap ?? -1)}`);
+    this.bestLabel.setText(`Best ${formatTime(player.bestLap ?? -1)}`);
 
     // Weapon panel slides up when something is held.
     const held = player.weapon;

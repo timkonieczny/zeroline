@@ -111,6 +111,25 @@ Both were found by measurement, and both would be easy to reintroduce:
 - **A saturated sky is a terrible bounce light.** The visual sky can be as vivid as it likes, but
   the hemisphere fill takes a washed-out version of it. Feeding the zenith in directly puts a
   blue cast on every white surface and the circuit stops reading as concrete.
+- **Hash the cell, not the pixel.** `fract(sin(uv · k) · big)` on a continuous UV is a white-noise
+  generator, not a pattern. Quantise with `floor` to the feature you want — a window, a tile —
+  and hash that. The building facades were television static for two commits because of this.
+- **A white subject on a white set has no silhouette.** The showroom needs a graded backdrop and a
+  floor a few stops under the ceiling, or the craft dissolves into the room.
+
+## Interface
+
+- **Typeface is Geo**, loaded from Google Fonts and awaited before any label is built. It ships a
+  single weight in roman and italic, so hierarchy comes from size, tracking and the italic —
+  never from `weight`, which would only get a synthesised faux-bold out of the canvas rasteriser.
+- **Sentence case.** `TextStyle.upper` is off by default. Shout only genuine abbreviations:
+  constructor tags, nation codes, SMAA, the wordmark.
+- **Two palettes, in `ui/Palette.ts`.** `DARK_UI` for anything over the circuit, `LIGHT_UI` for
+  the showroom. Widgets take one as an option; none of them hard-code a colour. Note the light
+  scheme's accent is a deeper blue than the HUD's cyan — 0x24d4ff has about two-to-one contrast
+  on white, which is decoration rather than legibility.
+- **Text is rasterised once per string.** `TextMesh.setText` is free when the string has not
+  changed, which is why per-frame readouts are cheap.
 
 ## Conventions
 

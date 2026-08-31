@@ -1,10 +1,7 @@
 import { Group, Mesh, PlaneGeometry } from 'three';
 import { TextMesh, panelMaterial } from './Text';
 import { clamp, lerp } from '@/core/math';
-
-const INK = 0xf2f6fa;
-const DIM = 0x76828e;
-const ACCENT = 0x24d4ff;
+import { DARK_UI, type UiPalette } from './Palette';
 
 export interface OptionRow {
   /** Setting name, shown on the left. */
@@ -45,17 +42,27 @@ export class OptionList extends Group {
   /** Called with the row and its new choice whenever a value changes. */
   onChange: ((row: OptionRow) => void) | null = null;
 
-  constructor(rows: readonly OptionRow[], options: { width?: number; rowHeight?: number; pixelRatio?: number } = {}) {
+  private readonly palette: UiPalette;
+
+  constructor(
+    rows: readonly OptionRow[],
+    options: { width?: number; rowHeight?: number; pixelRatio?: number; palette?: UiPalette } = {},
+  ) {
     super();
     this.width = options.width ?? 520;
     this.rowHeight = options.rowHeight ?? 50;
     const pixelRatio = options.pixelRatio ?? 2;
+    const palette = options.palette ?? DARK_UI;
+    this.palette = palette;
 
-    this.highlight = new Mesh(new PlaneGeometry(this.width, this.rowHeight - 8), panelMaterial(ACCENT, 0.13));
+    this.highlight = new Mesh(
+      new PlaneGeometry(this.width, this.rowHeight - 8),
+      panelMaterial(palette.highlight, palette.highlightAlpha),
+    );
     this.highlight.renderOrder = 1;
     this.add(this.highlight);
 
-    this.rule = new Mesh(new PlaneGeometry(3, this.rowHeight - 14), panelMaterial(ACCENT, 1));
+    this.rule = new Mesh(new PlaneGeometry(3, this.rowHeight - 14), panelMaterial(palette.accent, 1));
     this.rule.renderOrder = 2;
     this.add(this.rule);
 
@@ -63,19 +70,23 @@ export class OptionList extends Group {
       const group = new Group();
       group.position.y = -i * this.rowHeight;
 
-      const label = new TextMesh(row.label, { size: 18, weight: 400, tracking: 0.28, align: 'left' }, pixelRatio);
+      const label = new TextMesh(row.label, { size: 19, tracking: 0.22, align: 'left' }, pixelRatio);
       label.position.set(24, 0, 0);
 
-      const value = new TextMesh(row.choices[row.index] ?? '', { size: 18, weight: 300, tracking: 0.22, align: 'right' }, pixelRatio);
+      const value = new TextMesh(
+        row.choices[row.index] ?? '',
+        { size: 19, tracking: 0.18, align: 'right', italic: true },
+        pixelRatio,
+      );
       value.position.set(this.width - 44, 0, 0);
-      value.setColour(ACCENT);
+      value.setColour(palette.accent);
 
-      const left = new TextMesh('‹', { size: 20, weight: 400, tracking: 0, align: 'centre' }, pixelRatio);
-      const right = new TextMesh('›', { size: 20, weight: 400, tracking: 0, align: 'centre' }, pixelRatio);
+      const left = new TextMesh('‹', { size: 20, tracking: 0, align: 'centre' }, pixelRatio);
+      const right = new TextMesh('›', { size: 20, tracking: 0, align: 'centre' }, pixelRatio);
       left.position.set(this.width - 200, 0, 0);
       right.position.set(this.width - 24, 0, 0);
-      left.setColour(DIM);
-      right.setColour(DIM);
+      left.setColour(palette.dim);
+      right.setColour(palette.dim);
 
       group.add(label, value, left, right);
       this.rows.push({ group, label, value, left, right, row: { ...row } });
@@ -128,9 +139,9 @@ export class OptionList extends Group {
     this.rows.forEach((entry, i) => {
       const nearness = clamp(1 - Math.abs(i - this.shownIndex), 0, 1);
       entry.group.position.x = lerp(0, 14, nearness);
-      entry.label.setColour(i === this.index ? INK : DIM, 1);
-      entry.label.setOpacity(lerp(0.72, 1, nearness));
-      entry.value.setOpacity(lerp(0.6, 1, nearness));
+      entry.label.setColour(i === this.index ? this.palette.ink : this.palette.dim, 1);
+      entry.label.setOpacity(lerp(0.88, 1, nearness));
+      entry.value.setOpacity(lerp(0.8, 1, nearness));
       const chevron = i === this.index ? 1 : 0;
       entry.left.scale.setScalar(lerp(0.85, 1, chevron));
       entry.right.scale.setScalar(lerp(0.85, 1, chevron));

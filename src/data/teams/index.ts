@@ -39,7 +39,7 @@ export interface HullSpec {
 
 export interface Team {
   id: string;
-  /** Constructor name, shown uppercase. */
+  /** Constructor name, as it is set in the interface. */
   name: string;
   /** Short tag for the HUD and results table. */
   tag: string;
@@ -62,7 +62,7 @@ export interface Team {
 export const TEAMS: readonly Team[] = [
   {
     id: 'auroc',
-    name: 'AUROC',
+    name: 'Auroc',
     tag: 'AUR',
     nation: 'FR',
     blurb: 'No weaknesses, no excuses. The car every other car is measured against.',
@@ -72,7 +72,7 @@ export const TEAMS: readonly Team[] = [
   },
   {
     id: 'kestrel',
-    name: 'KESTREL DYNAMICS',
+    name: 'Kestrel Dynamics',
     tag: 'KES',
     nation: 'UK',
     blurb: 'Fastest thing on the grid in a straight line. Ask it to turn and it argues.',
@@ -82,7 +82,7 @@ export const TEAMS: readonly Team[] = [
   },
   {
     id: 'ionflux',
-    name: 'IONFLUX',
+    name: 'Ionflux',
     tag: 'ION',
     nation: 'JP',
     blurb: 'Violent off the line and out of corners. Runs out of legs on the long straights.',
@@ -92,7 +92,7 @@ export const TEAMS: readonly Team[] = [
   },
   {
     id: 'sabre9',
-    name: 'SABRE-9',
+    name: 'Sabre-9',
     tag: 'SB9',
     nation: 'DE',
     blurb: 'Armoured, heavy, unbothered. Wins by still being there on the last lap.',
@@ -102,7 +102,7 @@ export const TEAMS: readonly Team[] = [
   },
   {
     id: 'halcyon',
-    name: 'HALCYON MOTIV',
+    name: 'Halcyon Motiv',
     tag: 'HAL',
     nation: 'SE',
     blurb: 'Goes exactly where you point it. Forgives everything except impatience.',

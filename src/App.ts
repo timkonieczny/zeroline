@@ -9,6 +9,7 @@ import { Audio } from '@/core/Audio';
 import { AudioDirector } from '@/game/AudioDirector';
 import { loadSettings, saveSettings, type GameSettings } from '@/core/Settings';
 import type { OptionRow } from '@/ui/OptionList';
+import { loadUiFont } from '@/ui/Fonts';
 
 type Mode = 'menu' | 'race';
 
@@ -21,6 +22,14 @@ const RESULTS_HOLD = 20;
  * goes by throws the classification away before it has finished arriving.
  */
 const RESULTS_GRACE = 0.8;
+
+/**
+ * Quality levels in the order the settings row offers them.
+ *
+ * The row's labels are display strings now, so the index is what maps back to
+ * the setting rather than the text.
+ */
+const QUALITY_ORDER: readonly GameSettings['quality'][] = ['low', 'medium', 'high', 'ultra'];
 
 /** The menu does not need motion blur or speed streaks; it is not moving fast. */
 const MENU_QUALITY: PostFXQuality = {
@@ -42,7 +51,12 @@ const MENU_QUALITY: PostFXQuality = {
 export class App {
   private readonly renderer = new Renderer();
   private readonly input = new Input();
-  private readonly menu: MenuStage;
+  /**
+   * Built in `start`, not in the constructor: every label is rasterised into a
+   * canvas at construction, so the typeface has to be loaded first or the whole
+   * interface is drawn in the fallback and never redrawn.
+   */
+  private menu!: MenuStage;
   private readonly loop: Loop;
   private readonly audio = new Audio();
   private readonly settings: GameSettings;
@@ -65,10 +79,6 @@ export class App {
     this.settings = loadSettings();
     this.audio.setMix(this.settings.mix);
 
-    this.menu = new MenuStage(this.pixelRatio(), this.buildSettingRows());
-    this.menu.onStart = (selection) => this.startRace(selection);
-    this.menu.onSettingChanged = (row) => this.onSettingChanged(row);
-
     this.perf = document.createElement('div');
     this.perf.id = 'perf';
     this.perf.hidden = true;
@@ -86,10 +96,17 @@ export class App {
   }
 
   async start(): Promise<void> {
-    this.onStatus('REQUESTING DEVICE');
+    this.onStatus('Requesting device');
     await this.renderer.init();
 
-    this.onStatus('BUILDING FRONT END');
+    this.onStatus('Loading typeface');
+    await loadUiFont();
+
+    this.onStatus('Building front end');
+    this.menu = new MenuStage(this.pixelRatio(), this.buildSettingRows());
+    this.menu.onStart = (selection) => this.startRace(selection);
+    this.menu.onSettingChanged = (row) => this.onSettingChanged(row);
+    this.menu.attachRenderer(this.renderer.renderer);
     this.menuPost = new PostFX(this.renderer.renderer, this.menu.scene, this.menu.camera, MENU_QUALITY, {
       scene: this.menu.overlay,
       camera: this.menu.overlayCamera,
@@ -130,7 +147,7 @@ export class App {
     };
 
     if (!this.race) {
-      this.onStatus('BUILDING CIRCUIT');
+      this.onStatus('Building circuit');
       this.race = new RaceStage(selection.track, this.renderer, setup, this.pixelRatio());
       this.race.resize(window.innerWidth, window.innerHeight, this.pixelRatio());
     } else {
@@ -278,56 +295,61 @@ export class App {
 
   /** The settings screen's rows, seeded from what was last saved. */
   private buildSettingRows(): OptionRow[] {
-    const qualities = ['low', 'medium', 'high', 'ultra'];
+    const qualities = ['Low', 'Medium', 'High', 'Ultra'];
     // Percentages in tens: fine enough to be useful, coarse enough to reach the
     // end of the range in a couple of presses.
     const volumes = Array.from({ length: 11 }, (_, i) => `${i * 10}%`);
     const volumeIndex = (value: number): number => Math.round(value * 10);
 
     return [
-      { label: 'graphics', choices: qualities, index: qualities.indexOf(this.settings.quality) },
       {
-        label: 'antialiasing',
-        choices: ['off', 'smaa', 'temporal'],
+        label: 'Graphics',
+        choices: qualities,
+        index: Math.max(0, QUALITY_ORDER.indexOf(this.settings.quality)),
+      },
+      {
+        label: 'Antialiasing',
+        // SMAA stays shouted: it is an acronym, not a word.
+        choices: ['Off', 'SMAA', 'Temporal'],
         index: this.settings.antialias === 'none' ? 0 : this.settings.antialias === 'smaa' ? 1 : 2,
       },
-      { label: 'adaptive resolution', choices: ['off', 'on'], index: this.settings.adaptiveResolution ? 1 : 0 },
-      { label: 'frame target', choices: ['60 fps', '120 fps'], index: this.settings.targetFps === 120 ? 1 : 0 },
-      { label: 'master volume', choices: volumes, index: volumeIndex(this.settings.mix.master) },
-      { label: 'effects volume', choices: volumes, index: volumeIndex(this.settings.mix.effects) },
-      { label: 'music volume', choices: volumes, index: volumeIndex(this.settings.mix.music) },
+      { label: 'Adaptive resolution', choices: ['Off', 'On'], index: this.settings.adaptiveResolution ? 1 : 0 },
+      { label: 'Frame target', choices: ['60 fps', '120 fps'], index: this.settings.targetFps === 120 ? 1 : 0 },
+      { label: 'Master volume', choices: volumes, index: volumeIndex(this.settings.mix.master) },
+      { label: 'Effects volume', choices: volumes, index: volumeIndex(this.settings.mix.effects) },
+      { label: 'Music volume', choices: volumes, index: volumeIndex(this.settings.mix.music) },
     ];
   }
 
   private onSettingChanged(row: OptionRow): void {
     const value = row.choices[row.index] ?? '';
     switch (row.label) {
-      case 'graphics':
+      case 'Graphics':
         // The post chain is compiled at construction, so a quality change takes
         // effect on the next race rather than mid-frame.
-        this.applySettings({ quality: value as GameSettings['quality'] });
+        this.applySettings({ quality: QUALITY_ORDER[row.index] ?? 'high' });
         this.racePost?.dispose();
         this.racePost = null;
         break;
-      case 'antialiasing':
+      case 'Antialiasing':
         // Compiled into the chain, so it takes effect on the next race.
-        this.applySettings({ antialias: value === 'off' ? 'none' : value === 'smaa' ? 'smaa' : 'traa' });
+        this.applySettings({ antialias: row.index === 0 ? 'none' : row.index === 1 ? 'smaa' : 'traa' });
         this.racePost?.dispose();
         this.racePost = null;
         break;
-      case 'adaptive resolution':
-        this.applySettings({ adaptiveResolution: value === 'on' });
+      case 'Adaptive resolution':
+        this.applySettings({ adaptiveResolution: value === 'On' });
         break;
-      case 'frame target':
+      case 'Frame target':
         this.applySettings({ targetFps: value === '120 fps' ? 120 : 60 });
         break;
-      case 'master volume':
+      case 'Master volume':
         this.applySettings({ mix: { ...this.settings.mix, master: row.index / 10 } });
         break;
-      case 'effects volume':
+      case 'Effects volume':
         this.applySettings({ mix: { ...this.settings.mix, effects: row.index / 10 } });
         break;
-      case 'music volume':
+      case 'Music volume':
         this.applySettings({ mix: { ...this.settings.mix, music: row.index / 10 } });
         break;
     }

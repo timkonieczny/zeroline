@@ -172,27 +172,27 @@ export class ResultsTable {
     const text = (
       value: string,
       size: number,
-      weight: number,
       tracking: number,
       align: 'left' | 'right' | 'centre',
-    ): TextMesh => new TextMesh(value, { size, weight, tracking, align }, pixelRatio);
+      italic = false,
+    ): TextMesh => new TextMesh(value, { size, tracking, align, italic }, pixelRatio);
 
     this.panel = new Mesh(new PlaneGeometry(1, 1), ResultsTable.fadeMaterial(0x070b0f, this.panelOpacity));
     this.panel.renderOrder = 4;
 
-    this.title = text('final classification', 15, 500, 0.5, 'left');
+    this.title = text('Final classification', 15, 0.5, 'left');
     this.title.setColour(ACCENT);
-    this.subtitle = text('', 30, 250, 0.2, 'left');
+    this.subtitle = text('', 32, 0.16, 'left', true);
 
-    this.headerPosition = text('pos', 11, 600, 0.44, 'right');
-    this.headerTeam = text('constructor', 11, 600, 0.44, 'left');
-    this.headerTime = text('time', 11, 600, 0.44, 'right');
+    this.headerPosition = text('Pos', 11, 0.44, 'right');
+    this.headerTeam = text('Constructor', 11, 0.44, 'left');
+    this.headerTime = text('Time', 11, 0.44, 'right');
     for (const header of [this.headerPosition, this.headerTeam, this.headerTime]) header.setColour(DIM);
 
     this.rule = new Mesh(new PlaneGeometry(1, 1), ResultsTable.fadeMaterial(0x2c3945, this.ruleOpacity));
     this.rule.renderOrder = 5;
 
-    this.footer = text('tab hide  ·  enter continue', 11, 500, 0.42, 'centre');
+    this.footer = text('Tab hide  ·  Enter continue', 11, 0.42, 'centre');
     this.footer.setColour(DIM);
 
     this.group.add(
@@ -216,10 +216,11 @@ export class ResultsTable {
       const row: Row = {
         group,
         highlight,
-        position: text('', 26, 250, 0.06, 'right'),
-        team: text('', 19, 300, 0.24, 'left'),
-        tag: text('', 11, 600, 0.4, 'left'),
-        time: text('', 20, 300, 0.1, 'right'),
+        position: text('', 28, 0.04, 'right', true),
+        team: text('', 19, 0.2, 'left'),
+        // Constructor tag and nation: genuine abbreviations, so genuinely shouted.
+        tag: new TextMesh('', { size: 11, tracking: 0.4, align: 'left', upper: true }, pixelRatio),
+        time: text('', 20, 0.08, 'right'),
       };
       row.position.position.set(COL_POSITION, 0, 0);
       row.team.position.set(COL_TEAM, 5, 0);

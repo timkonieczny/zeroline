@@ -19,8 +19,8 @@ import type { TrackDefinition } from '@/track/TrackTypes';
  */
 export const meridianCoast: TrackDefinition = {
   id: 'meridian-coast',
-  name: 'MERIDIAN COAST',
-  subtitle: 'CIRCUIT 01',
+  name: 'Meridian Coast',
+  subtitle: 'Circuit 01',
   region: 'MC',
   laps: 3,
   spacing: 2,
@@ -29,15 +29,15 @@ export const meridianCoast: TrackDefinition = {
   startLine: 0.1,
 
   corners: [
-    { name: 'T1 HARBOUR HOOK', x: 520, z: 0, radius: 90, height: -6, width: 34 },
-    { name: 'T2 SEAWALL SWEEP', x: 461, z: 415, radius: 300, height: -12, width: 36 },
-    { name: 'T3 CHICANE IN', x: 138, z: 553, radius: 80, height: -16, width: 30 },
-    { name: 'T4 CHICANE OUT', x: -32, z: 459, radius: 80, height: -15, width: 30 },
-    { name: 'T5 MERIDIAN BEND', x: -431, z: 446, radius: 220, height: 8, width: 36 },
-    { name: 'T6 HAIRPIN', x: -539, z: 38, radius: 55, height: 18, width: 30 },
-    { name: 'T7 TERMINAL KINK', x: -291, z: -155, radius: 200, height: 16, width: 34 },
-    { name: 'T8 GRANDSTAND SWEEP', x: -145, z: -447, radius: 260, height: 8, width: 36 },
-    { name: 'T9 STADIUM', x: 297, z: -475, radius: 130, height: 2, width: 38 },
+    { name: 'T1 Harbour Hook', x: 520, z: 0, radius: 90, height: -6, width: 34 },
+    { name: 'T2 Seawall Sweep', x: 461, z: 415, radius: 300, height: -12, width: 36 },
+    { name: 'T3 Chicane In', x: 138, z: 553, radius: 80, height: -16, width: 30 },
+    { name: 'T4 Chicane Out', x: -32, z: 459, radius: 80, height: -15, width: 30 },
+    { name: 'T5 Meridian Bend', x: -431, z: 446, radius: 220, height: 8, width: 36 },
+    { name: 'T6 Hairpin', x: -539, z: 38, radius: 55, height: 18, width: 30 },
+    { name: 'T7 Terminal Kink', x: -291, z: -155, radius: 200, height: 16, width: 34 },
+    { name: 'T8 Grandstand Sweep', x: -145, z: -447, radius: 260, height: 8, width: 36 },
+    { name: 'T9 Stadium', x: 297, z: -475, radius: 130, height: 2, width: 38 },
   ],
 
   tunnels: [{ from: 0.425, to: 0.495, height: 15, lightSpacing: 22 }],

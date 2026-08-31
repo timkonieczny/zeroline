@@ -97,6 +97,13 @@ There are no audio files either. The engine is two detuned saws and a filtered n
 continuously by speed, impacts are shaped noise bursts, and the music is a slow generative pad.
 Audio starts on your first key press, because browsers require a gesture.
 
+## Interface
+
+Set in [Geo](https://fonts.google.com/specimen/Geo), with the italic for headlines and anything
+picked out. The front end is a lit showroom — the craft turns on a plinth, reflected in the floor,
+with overhead softboxes sliding across the hull — and the in-race HUD is light type over the
+circuit. Two palettes, so both stay legible on their own background.
+
 ## Development
 
 See [CLAUDE.md](CLAUDE.md) for architecture and ground rules.
