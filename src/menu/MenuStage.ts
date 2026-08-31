@@ -15,6 +15,7 @@ import { MeshStandardNodeMaterial } from 'three/webgpu';
 import { color, float, fract, mix, oneMinus, smoothstep, time, uv } from 'three/tsl';
 import { TextMesh, panelMaterial } from '@/ui/Text';
 import { ListMenu, StatBar } from '@/ui/Widgets';
+import { OptionList, type OptionRow } from '@/ui/OptionList';
 import { GliderModel } from '@/game/GliderModel';
 import { TEAMS, type Team } from '@/data/teams';
 import { SPEED_CLASSES, type SpeedClass } from '@/game/Handling';
@@ -24,7 +25,7 @@ import type { MenuAction } from '@/core/Input';
 import type { RaceMode } from '@/game/Race';
 import { lerp } from '@/core/math';
 
-export type MenuScreen = 'title' | 'main' | 'track' | 'craft' | 'class' | 'controls';
+export type MenuScreen = 'title' | 'main' | 'track' | 'craft' | 'class' | 'controls' | 'settings';
 
 export interface MenuSelection {
   mode: RaceMode;
@@ -57,6 +58,7 @@ const STATIONS: Record<MenuScreen, { position: [number, number, number]; look: [
   craft: { position: [0.5, 2.6, 11], look: [-3.4, 2.3, 0], fov: 34 },
   class: { position: [5, 3.0, 12], look: [-4, 2.3, 0], fov: 38 },
   controls: { position: [9, 3.6, 14], look: [-4.5, 2.3, 0], fov: 44 },
+  settings: { position: [9, 5.2, 14], look: [-4.5, 2.6, 0], fov: 44 },
 };
 
 const TRACKS: readonly TrackDefinition[] = [meridianCoast];
@@ -88,6 +90,8 @@ export class MenuStage {
 
   /** Fires when the player confirms a race. */
   onStart: ((selection: MenuSelection) => void) | null = null;
+  /** Fires when a settings row is changed. */
+  onSettingChanged: ((row: OptionRow) => void) | null = null;
 
   screen: MenuScreen = 'title';
 
@@ -100,6 +104,7 @@ export class MenuStage {
 
   private readonly panels = new Map<MenuScreen, Group>();
   private readonly lists = new Map<MenuScreen, ListMenu>();
+  private settingsList: OptionList | null = null;
   private readonly statBars: StatBar[] = [];
   private readonly craftBlurb: TextMesh;
   private readonly craftName: TextMesh;
@@ -130,7 +135,7 @@ export class MenuStage {
   private toStation = STATIONS.title;
   private titlePulse = 0;
 
-  constructor(pixelRatio: number) {
+  constructor(pixelRatio: number, private readonly settingRows: readonly OptionRow[] = []) {
     this.pixelRatio = pixelRatio;
 
     // --- Hangar ---------------------------------------------------------
@@ -219,6 +224,7 @@ export class MenuStage {
       [
         { label: 'race', detail: 'eight craft · three laps' },
         { label: 'time trial', detail: 'solo · best lap' },
+        { label: 'settings', detail: 'quality · audio' },
         { label: 'controls', detail: 'keyboard · gamepad' },
       ],
       { pixelRatio: this.pixelRatio, width: 480 },
@@ -284,6 +290,12 @@ export class MenuStage {
     });
     this.panels.set('controls', controlsPanel);
 
+    this.settingsList = new OptionList(this.settingRows, { pixelRatio: this.pixelRatio, width: 520 });
+    this.settingsList.onChange = (row) => this.onSettingChanged?.(row);
+    const settingsPanel = new Group();
+    settingsPanel.add(this.settingsList);
+    this.panels.set('settings', settingsPanel);
+
     for (const panel of this.panels.values()) {
       panel.visible = false;
       this.overlay.add(panel);
@@ -305,6 +317,7 @@ export class MenuStage {
       craft: 'zeroline / circuit / craft',
       class: 'zeroline / circuit / craft / class',
       controls: 'zeroline / controls',
+      settings: 'zeroline / settings',
     };
     this.breadcrumb.setText(trail[screen]);
     this.breadcrumb.visible = screen !== 'title';
@@ -316,6 +329,7 @@ export class MenuStage {
       craft: 'enter select   ·   esc back',
       class: 'enter start   ·   esc back',
       controls: 'esc back',
+      settings: 'left right adjust   ·   esc back',
     };
     this.hint.setText(hints[screen]);
     this.hint.visible = screen !== 'title';
@@ -328,6 +342,17 @@ export class MenuStage {
   /** Handles one queued menu action. Returns true if it was consumed. */
   handle(action: MenuAction): boolean {
     const list = this.lists.get(this.screen);
+
+    if (this.screen === 'settings' && this.settingsList) {
+      if (action === 'up' || action === 'down') {
+        this.settingsList.move(action === 'up' ? -1 : 1);
+        return true;
+      }
+      if (action === 'left' || action === 'right') {
+        this.settingsList.adjust(action === 'left' ? -1 : 1);
+        return true;
+      }
+    }
 
     if (action === 'up' || action === 'down') {
       if (!list) return false;
@@ -344,6 +369,7 @@ export class MenuStage {
         craft: 'track',
         class: 'craft',
         controls: 'main',
+        settings: 'main',
       };
       const target = backTo[this.screen];
       if (target) this.setScreen(target);
@@ -359,7 +385,8 @@ export class MenuStage {
 
       case 'main': {
         const index = list?.index ?? 0;
-        if (index === 2) this.setScreen('controls');
+        if (index === 2) this.setScreen('settings');
+        else if (index === 3) this.setScreen('controls');
         else {
           this.selection.mode = index === 1 ? 'timeTrial' : 'race';
           this.setScreen('track');
@@ -386,6 +413,7 @@ export class MenuStage {
         return true;
 
       case 'controls':
+      case 'settings':
         this.setScreen('main');
         return true;
     }
@@ -482,6 +510,7 @@ export class MenuStage {
 
     const controls = this.panels.get('controls');
     controls?.position.set(left, height * 0.68, 0);
+    this.panels.get('settings')?.position.set(left, height * 0.68, 0);
   }
 
   update(dt: number): void {
@@ -519,6 +548,7 @@ export class MenuStage {
     this.craftHolder.position.y = 2.6 + Math.sin(this.craftSpin * 1.7) * 0.09;
 
     for (const list of this.lists.values()) list.update(dt);
+    this.settingsList?.update(dt);
     for (const bar of this.statBars) bar.update(dt);
 
     // The title prompt breathes rather than blinking.
@@ -528,6 +558,7 @@ export class MenuStage {
 
   dispose(): void {
     this.craftModel?.dispose();
+    this.settingsList?.dispose();
     for (const list of this.lists.values()) list.dispose();
     for (const bar of this.statBars) bar.dispose();
   }

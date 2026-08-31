@@ -65,6 +65,22 @@ What you draw depends on where you are running: the leader gets defensive and ut
 back of the field gets the heavy ordnance. Holding `Shift` throws the weapon away and converts it
 into shield energy instead — which is often the better call.
 
+## Settings
+
+`SETTINGS` from the main menu, adjusted with left and right. Graphics quality, adaptive
+resolution, frame target, and three volume faders. Everything is stored in local storage and
+survives a reload.
+
+The game always renders at the display's real pixel density. Adaptive resolution is a separate
+multiplier layered on top of native — it trades sharpness for frame rate under load, and never
+locks you to a non-native image.
+
+## Sound
+
+There are no audio files either. The engine is two detuned saws and a filtered noise bed driven
+continuously by speed, impacts are shaped noise bursts, and the music is a slow generative pad.
+Audio starts on your first key press, because browsers require a gesture.
+
 ## Development
 
 See [CLAUDE.md](CLAUDE.md) for architecture and ground rules.

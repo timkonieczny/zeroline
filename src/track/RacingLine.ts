@@ -1,8 +1,8 @@
 import { Vector3 } from 'three';
-import { createTrackFrame, type TrackFrame } from './TrackSpline';
+import { createTrackFrame } from './TrackSpline';
 import type { Track } from './Track';
 import { CRAFT_HALF_WIDTH } from '@/game/Craft';
-import { clamp, lerp, wrap } from '@/core/math';
+import { lerp, wrap } from '@/core/math';
 
 /** Metres of road left unused on each side, beyond the craft's own half-width. */
 const EDGE_MARGIN = 1.2;
@@ -29,7 +29,6 @@ export interface LinePoint {
 const _a = new Vector3();
 const _b = new Vector3();
 const _c = new Vector3();
-const _mid = new Vector3();
 const _frame = createTrackFrame();
 
 /**
@@ -76,27 +75,55 @@ export class RacingLine {
     return Math.max(0, half - CRAFT_HALF_WIDTH - EDGE_MARGIN);
   }
 
-  /** Pull the line toward the locally straightest path, inside the road. */
+  /**
+   * Pull the line toward the locally straightest path, inside the road.
+   *
+   * The centreline and its frames do not change between passes, so they are
+   * flattened into typed arrays once and the inner loop becomes pure
+   * arithmetic. Sampling the spline inside the loop instead — six hundred
+   * passes over sixteen hundred points, three curve evaluations each — cost
+   * three seconds of blocked main thread every time a circuit was loaded.
+   */
   private relax(): void {
     const n = this.count;
-    const positionOf = (i: number, offset: number, out: Vector3): Vector3 => {
-      const f = this.track.spline.sample(wrap(i, n) * this.step, _frame);
-      return out.copy(f.position).addScaledVector(f.right, offset);
-    };
 
+    const centreX = new Float64Array(n);
+    const centreY = new Float64Array(n);
+    const centreZ = new Float64Array(n);
+    const rightX = new Float64Array(n);
+    const rightY = new Float64Array(n);
+    const rightZ = new Float64Array(n);
+    const limits = new Float64Array(n);
+
+    for (let i = 0; i < n; i++) {
+      const f = this.track.spline.sample(i * this.step, _frame);
+      centreX[i] = f.position.x;
+      centreY[i] = f.position.y;
+      centreZ[i] = f.position.z;
+      rightX[i] = f.right.x;
+      rightY[i] = f.right.y;
+      rightZ[i] = f.right.z;
+      limits[i] = this.limitAt(i);
+    }
+
+    const offsets = this.offsets;
     for (let pass = 0; pass < RELAX_PASSES; pass++) {
       for (let i = 0; i < n; i++) {
-        const prev = (i - 1 + n) % n;
-        const next = (i + 1) % n;
-        positionOf(prev, this.offsets[prev]!, _a);
-        positionOf(next, this.offsets[next]!, _b);
-        _mid.addVectors(_a, _b).multiplyScalar(0.5);
+        const prev = i === 0 ? n - 1 : i - 1;
+        const next = i === n - 1 ? 0 : i + 1;
 
-        const f: TrackFrame = this.track.spline.sample(i * this.step, _frame);
-        _c.subVectors(_mid, f.position);
-        const target = _c.dot(f.right);
-        const limit = this.limitAt(i);
-        this.offsets[i] = clamp(lerp(this.offsets[i]!, target, RELAX_RATE), -limit, limit);
+        // Midpoint of the neighbours, in world space.
+        const midX = (centreX[prev]! + rightX[prev]! * offsets[prev]! + centreX[next]! + rightX[next]! * offsets[next]!) * 0.5;
+        const midY = (centreY[prev]! + rightY[prev]! * offsets[prev]! + centreY[next]! + rightY[next]! * offsets[next]!) * 0.5;
+        const midZ = (centreZ[prev]! + rightZ[prev]! * offsets[prev]! + centreZ[next]! + rightZ[next]! * offsets[next]!) * 0.5;
+
+        // Project it back onto this sample's lateral axis.
+        const target =
+          (midX - centreX[i]!) * rightX[i]! + (midY - centreY[i]!) * rightY[i]! + (midZ - centreZ[i]!) * rightZ[i]!;
+
+        const limit = limits[i]!;
+        const moved = offsets[i]! + (target - offsets[i]!) * RELAX_RATE;
+        offsets[i] = moved < -limit ? -limit : moved > limit ? limit : moved;
       }
     }
   }

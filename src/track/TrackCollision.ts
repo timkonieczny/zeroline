@@ -26,6 +26,8 @@ export interface SurfaceHit {
 
 const _delta = new Vector3();
 const _seg = new Vector3();
+const _a = new Vector3();
+const _b = new Vector3();
 
 /**
  * Nearest-point queries against a track centreline.
@@ -120,9 +122,11 @@ export class TrackCollision {
     let best = -1;
 
     if (hint !== undefined) {
-      // Window wide enough to cover a full tick of travel at any speed, with
-      // margin for the craft being thrown sideways by a collision.
-      const window = Math.max(8, Math.ceil(60 / this.spline.step));
+      // A craft covers under two metres per tick even at RAPIER speed, so a
+      // fifteen-metre window is generous. Anything that moves further than that
+      // in one step — a respawn, a teleport — lands on the window edge and
+      // falls through to the grid search below.
+      const window = Math.max(6, Math.ceil(15 / this.spline.step));
       const centre = this.spline.sampleIndexAt(hint);
       let bestD = Infinity;
       for (let k = -window; k <= window; k++) {
@@ -184,18 +188,16 @@ export class TrackCollision {
     let bestS = index * step;
     let bestD = Infinity;
 
-    const a = new Vector3();
-    const b = new Vector3();
     for (let k = -1; k <= 0; k++) {
       const i = (((index + k) % n) + n) % n;
       const j = (i + 1) % n;
-      this.spline.positionOfSample(i, a);
-      this.spline.positionOfSample(j, b);
-      _seg.subVectors(b, a);
+      this.spline.positionOfSample(i, _a);
+      this.spline.positionOfSample(j, _b);
+      _seg.subVectors(_b, _a);
       const lenSq = _seg.lengthSq();
       if (lenSq < 1e-12) continue;
-      const t = clamp(_delta.subVectors(point, a).dot(_seg) / lenSq, 0, 1);
-      const d = a.addScaledVector(_seg, t).distanceToSquared(point);
+      const t = clamp(_delta.subVectors(point, _a).dot(_seg) / lenSq, 0, 1);
+      const d = _a.addScaledVector(_seg, t).distanceToSquared(point);
       if (d < bestD) {
         bestD = d;
         bestS = (i + t) * step;

@@ -148,6 +148,9 @@ export class Race {
       }
 
       stepCraft(craft, input, this.track, dt);
+      // Keep the resolved intent on the craft. Audio, effects and the HUD all
+      // want to know what a craft was asked to do, not just what it did.
+      copyInputSnapshot(input, craft.input);
       this.applyPads(craft, dt);
       this.applyWeapons(craft, input, dt);
       this.trackProgress(craft);

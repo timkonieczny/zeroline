@@ -5,6 +5,10 @@ import { PostFX, QUALITY_PRESETS, type PostFXQuality } from '@/core/PostFX';
 import { MenuStage, type MenuSelection } from '@/menu/MenuStage';
 import { RaceStage } from '@/game/RaceStage';
 import { TEAMS, type Team } from '@/data/teams';
+import { Audio } from '@/core/Audio';
+import { AudioDirector } from '@/game/AudioDirector';
+import { loadSettings, saveSettings, type GameSettings } from '@/core/Settings';
+import type { OptionRow } from '@/ui/OptionList';
 
 type Mode = 'menu' | 'race';
 
@@ -30,6 +34,9 @@ export class App {
   private readonly input = new Input();
   private readonly menu: MenuStage;
   private readonly loop: Loop;
+  private readonly audio = new Audio();
+  private readonly settings: GameSettings;
+  private director: AudioDirector | null = null;
 
   private menuPost: PostFX | null = null;
   private racePost: PostFX | null = null;
@@ -42,8 +49,12 @@ export class App {
   private perfTimer = 0;
 
   constructor(private readonly onStatus: (text: string) => void) {
-    this.menu = new MenuStage(this.pixelRatio());
+    this.settings = loadSettings();
+    this.audio.setMix(this.settings.mix);
+
+    this.menu = new MenuStage(this.pixelRatio(), this.buildSettingRows());
     this.menu.onStart = (selection) => this.startRace(selection);
+    this.menu.onSettingChanged = (row) => this.onSettingChanged(row);
 
     this.perf = document.createElement('div');
     this.perf.id = 'perf';
@@ -77,6 +88,7 @@ export class App {
     window.addEventListener('keydown', this.onKeyDown);
     this.onResize();
 
+    this.renderer.setAdaptive(this.settings.adaptiveResolution, this.settings.targetFps);
     this.loop.start();
   }
 
@@ -107,21 +119,31 @@ export class App {
     if (!this.race) {
       this.onStatus('BUILDING CIRCUIT');
       this.race = new RaceStage(selection.track, this.renderer, setup, this.pixelRatio());
-      this.racePost = new PostFX(
-        this.renderer.renderer,
-        this.race.scene,
-        this.renderer.camera,
-        QUALITY_PRESETS.high,
-        { scene: this.race.hud.scene, camera: this.race.hud.camera },
-      );
       this.race.resize(window.innerWidth, window.innerHeight, this.pixelRatio());
     } else {
       this.race.restart(setup);
     }
 
+    // Rebuilt when missing, which is also how a graphics-quality change is
+    // picked up: the chain is compiled once, so it is thrown away rather than
+    // reconfigured.
+    if (!this.racePost) {
+      this.racePost = new PostFX(
+        this.renderer.renderer,
+        this.race.scene,
+        this.renderer.camera,
+        QUALITY_PRESETS[this.settings.quality],
+        { scene: this.race.hud.scene, camera: this.race.hud.camera },
+      );
+    }
+
     this.finishedFor = 0;
     this.mode = 'race';
     this.input.clearMenuActions();
+
+    if (this.director) this.director.attach(this.race.race);
+    else this.director = new AudioDirector(this.audio, this.race.race);
+    this.audio.startEngine();
   }
 
   /** Fills the other seven seats, avoiding a grid of identical craft where possible. */
@@ -135,6 +157,7 @@ export class App {
   private returnToMenu(): void {
     this.mode = 'menu';
     this.input.clearMenuActions();
+    this.audio.stopEngine();
   }
 
   private tick(step: number): void {
@@ -155,9 +178,17 @@ export class App {
 
     let action = this.input.nextMenuAction();
     while (action) {
+      // The first input of the session is also the gesture that lets the audio
+      // context start; browsers will not allow it any earlier.
+      void this.audio.resume().then(() => this.audio.startAmbience());
+
       if (this.mode === 'menu') {
+        if (action === 'confirm') this.audio.menuConfirm();
+        else if (action === 'back') this.audio.menuBack();
+        else this.audio.menuMove();
         this.menu.handle(action);
       } else if (action === 'pause' || action === 'back') {
+        this.audio.menuBack();
         this.returnToMenu();
       }
       action = this.input.nextMenuAction();
@@ -170,6 +201,7 @@ export class App {
       const player = this.race.race.player;
       if (player.telemetry.impact > 0) this.input.rumble(player.telemetry.impact, 140);
       this.race.render(alpha, frameTime, this.input.snapshot.lookBack, this.renderer.camera);
+      this.director?.update(frameTime);
       this.racePost.setDrive(player.telemetry.speedFraction, player.state.boost > 0, frameTime);
       this.racePost.render();
     }
@@ -203,8 +235,65 @@ export class App {
       .join('\n');
   }
 
+  /** The settings screen's rows, seeded from what was last saved. */
+  private buildSettingRows(): OptionRow[] {
+    const qualities = ['low', 'medium', 'high', 'ultra'];
+    // Percentages in tens: fine enough to be useful, coarse enough to reach the
+    // end of the range in a couple of presses.
+    const volumes = Array.from({ length: 11 }, (_, i) => `${i * 10}%`);
+    const volumeIndex = (value: number): number => Math.round(value * 10);
+
+    return [
+      { label: 'graphics', choices: qualities, index: qualities.indexOf(this.settings.quality) },
+      { label: 'adaptive resolution', choices: ['off', 'on'], index: this.settings.adaptiveResolution ? 1 : 0 },
+      { label: 'frame target', choices: ['60 fps', '120 fps'], index: this.settings.targetFps === 120 ? 1 : 0 },
+      { label: 'master volume', choices: volumes, index: volumeIndex(this.settings.mix.master) },
+      { label: 'effects volume', choices: volumes, index: volumeIndex(this.settings.mix.effects) },
+      { label: 'music volume', choices: volumes, index: volumeIndex(this.settings.mix.music) },
+    ];
+  }
+
+  private onSettingChanged(row: OptionRow): void {
+    const value = row.choices[row.index] ?? '';
+    switch (row.label) {
+      case 'graphics':
+        // The post chain is compiled at construction, so a quality change takes
+        // effect on the next race rather than mid-frame.
+        this.applySettings({ quality: value as GameSettings['quality'] });
+        this.racePost?.dispose();
+        this.racePost = null;
+        break;
+      case 'adaptive resolution':
+        this.applySettings({ adaptiveResolution: value === 'on' });
+        break;
+      case 'frame target':
+        this.applySettings({ targetFps: value === '120 fps' ? 120 : 60 });
+        break;
+      case 'master volume':
+        this.applySettings({ mix: { ...this.settings.mix, master: row.index / 10 } });
+        break;
+      case 'effects volume':
+        this.applySettings({ mix: { ...this.settings.mix, effects: row.index / 10 } });
+        break;
+      case 'music volume':
+        this.applySettings({ mix: { ...this.settings.mix, music: row.index / 10 } });
+        break;
+    }
+  }
+
+  /** Applies and persists a settings change. */
+  applySettings(change: Partial<GameSettings>): void {
+    Object.assign(this.settings, change);
+    if (change.mix) this.audio.setMix(this.settings.mix);
+    if (change.adaptiveResolution !== undefined || change.targetFps !== undefined) {
+      this.renderer.setAdaptive(this.settings.adaptiveResolution, this.settings.targetFps);
+    }
+    saveSettings(this.settings);
+  }
+
   dispose(): void {
     this.loop.stop();
+    this.audio.dispose();
     this.input.detach();
     window.removeEventListener('resize', this.onResize);
     window.removeEventListener('keydown', this.onKeyDown);

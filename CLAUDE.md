@@ -81,6 +81,21 @@ tests/       Vitest suites for the simulation
 - **`core/Renderer.ts`** — renders at the display's real pixel density (`devicePixelRatio`), with
   a `matchMedia` listener for the window moving between monitors. Dynamic resolution is a
   separate multiplier on top of native, never a replacement for it.
+- **`core/Audio.ts`** — every sound synthesised at runtime. No files, same as the visuals.
+  `game/AudioDirector.ts` watches race state for edges and turns them into sound, so the
+  simulation stays free of side effects and a replay cannot double-trigger anything.
+
+## Things that were slow, and why they are not any more
+
+Both were found by measurement, and both would be easy to reintroduce:
+
+- **The racing line's relaxation** sampled the spline three times per point per pass — six
+  hundred passes over sixteen hundred points. Three seconds of blocked main thread on every
+  circuit load. The frames do not change between passes, so they are flattened into typed
+  arrays once and the inner loop is plain arithmetic. Now 44 ms.
+- **The collision query's search window** was sized for sixty metres of travel per tick. A
+  craft covers under two at RAPIER speed. Narrowing it to fifteen made the headless test suite
+  three times faster and changed no lap time by a millisecond.
 
 ## Conventions
 
