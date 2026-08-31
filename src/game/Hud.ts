@@ -4,7 +4,7 @@ import { float, smoothstep, uniform, uv, vec3 } from 'three/tsl';
 import { TextMesh, panelMaterial } from '@/ui/Text';
 import type { Race } from './Race';
 import { WEAPONS } from './weapons/Weapons';
-import { ResultsTable } from './Results';
+import { ResultsTable, formatTime } from './Results';
 import { clamp01, lerp } from '@/core/math';
 
 /** Layout margin from the screen edge, in pixels. */
@@ -19,13 +19,6 @@ const SCRIM_STRENGTH = 0.6;
 const INK = 0xf2f6fa;
 const DIM = 0x8b97a3;
 const WARN = 0xff3d5e;
-
-function formatTime(seconds: number): string {
-  if (!Number.isFinite(seconds) || seconds < 0) return '--:--.---';
-  const m = Math.floor(seconds / 60);
-  const s = seconds - m * 60;
-  return `${m}:${s.toFixed(3).padStart(6, '0')}`;
-}
 
 /**
  * The in-race HUD, drawn as a flat scene on top of the finished frame.
@@ -164,6 +157,7 @@ export class Hud {
     ]) {
       mesh.setPixelRatio(pixelRatio);
     }
+    this.results.setPixelRatio(pixelRatio);
 
     this.layout();
   }
@@ -247,7 +241,7 @@ export class Hud {
     // Racing readouts fade out under the classification. The bars and scrims
     // are plain meshes with no text opacity, so the whole group is hidden once
     // the fade has run rather than being left at a residual alpha.
-    this.raceChrome = lerp(this.raceChrome, this.results.shown ? 0 : 1, 1 - Math.exp(-dt * 7));
+    this.raceChrome = lerp(this.raceChrome, race.finished ? 0 : 1, 1 - Math.exp(-dt * 7));
     this.root.visible = this.raceChrome > 0.02;
     for (const mesh of [
       this.speedValue,

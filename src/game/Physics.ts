@@ -263,6 +263,7 @@ export function placeOnGrid(craft: Craft, track: Track, slot: number): void {
   craft.lap = 0;
   craft.distance = 0;
   craft.finishTime = null;
+  craft.finishDistance = 0;
   craft.bestLap = null;
   craft.lastLapAt = 0;
   craft.hasStartedLap = false;

@@ -12,10 +12,17 @@ import type { OptionRow } from '@/ui/OptionList';
 
 type Mode = 'menu' | 'race';
 
-/** The menu does not need motion blur or speed streaks; it is not moving fast. */
 /** Seconds the classification stays up before it dismisses itself. */
 const RESULTS_HOLD = 14;
+/**
+ * Seconds after the flag before a dismissal is accepted.
+ *
+ * `Space` is both fire and confirm, so without this a shot fired as the line
+ * goes by throws the classification away before it has finished arriving.
+ */
+const RESULTS_GRACE = 0.8;
 
+/** The menu does not need motion blur or speed streaks; it is not moving fast. */
 const MENU_QUALITY: PostFXQuality = {
   antialias: true,
   motionBlur: false,
@@ -204,8 +211,9 @@ export class App {
         else this.audio.menuMove();
         this.menu.handle(action);
       } else if (this.race?.race.finished) {
-        // Any of confirm, back or pause takes the classification away.
-        if (action === 'confirm' || action === 'back' || action === 'pause') {
+        // Any of confirm, back or pause takes the classification away, once it
+        // has had a moment to arrive.
+        if (this.finishedFor > RESULTS_GRACE && (action === 'confirm' || action === 'back' || action === 'pause')) {
           this.audio.menuConfirm();
           this.dismissResults();
         }

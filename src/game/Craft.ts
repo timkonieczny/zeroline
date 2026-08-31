@@ -150,6 +150,13 @@ export class Craft {
   position = 1;
   /** Race time in seconds when the craft took the flag, or null. */
   finishTime: number | null = null;
+  /**
+   * Progress in metres at the moment the flag fell, or 0 while still racing.
+   *
+   * A finisher keeps driving, so `distance` is no use as a reference for the
+   * craft still out there. This is where the finish line sat.
+   */
+  finishDistance = 0;
   /** Best lap time in seconds, or null. */
   bestLap: number | null = null;
   /** Race time in seconds at the last line crossing. */

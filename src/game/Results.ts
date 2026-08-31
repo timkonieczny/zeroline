@@ -34,9 +34,14 @@ const DIM = 0x7d8894;
 const ACCENT = 0x24d4ff;
 const GOLD = 0xffd76b;
 
-function formatTime(seconds: number): string {
-  const m = Math.floor(seconds / 60);
-  const s = seconds - m * 60;
+/** `M:SS.mmm`, or a placeholder for a time that does not exist yet. */
+export function formatTime(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return '--:--.---';
+  // Round to milliseconds first: formatting the seconds on their own turns
+  // 119.9996 into "1:60.000" rather than "2:00.000".
+  const ms = Math.round(seconds * 1000);
+  const m = Math.floor(ms / 60_000);
+  const s = (ms - m * 60_000) / 1000;
   return `${m}:${s.toFixed(3).padStart(6, '0')}`;
 }
 
@@ -94,15 +99,24 @@ function classifyTime(craft: Craft, leader: Craft | undefined, race: Race): stri
   if (craft.finishTime !== null) return formatTime(craft.finishTime);
   if (!leader || craft === leader) return '—';
 
-  const behind = leader.distance - craft.distance;
-  if (behind <= 0) return '—';
+  // A leader who has taken the flag keeps driving, so its live distance is no
+  // longer the finish line. Measure against where the line actually was, and
+  // add the time that has passed since — which is what makes the interval
+  // resolve into the craft's real deficit as it crosses.
+  const finished = leader.finishTime !== null;
+  const reference = finished ? leader.finishDistance : leader.distance;
+  const sinceFlag = finished ? Math.max(0, race.time - leader.finishTime!) : 0;
 
-  const lapsBehind = Math.floor(behind / race.track.length);
+  const behind = reference - craft.distance;
+  if (behind <= 0 && !finished) return '—';
+
+  const remaining = Math.max(0, behind);
+  const lapsBehind = Math.floor(remaining / race.track.length);
   if (lapsBehind >= 1) return `+${lapsBehind} lap${lapsBehind > 1 ? 's' : ''}`;
 
   // Convert the distance gap into a time gap at the craft's own pace.
   const pace = Math.max(20, craft.telemetry.speed);
-  return formatGap(behind / pace);
+  return formatGap(sinceFlag + remaining / pace);
 }
 
 /**
@@ -211,6 +225,26 @@ export class ResultsTable {
       group.visible = false;
       this.rows.push(row);
       this.group.add(group);
+    }
+  }
+
+  /** Re-rasterises the table's text after a display or zoom change. */
+  setPixelRatio(ratio: number): void {
+    for (const text of [
+      this.title,
+      this.subtitle,
+      this.headerPosition,
+      this.headerTeam,
+      this.headerTime,
+      this.footer,
+    ]) {
+      text.setPixelRatio(ratio);
+    }
+    for (const row of this.rows) {
+      row.position.setPixelRatio(ratio);
+      row.team.setPixelRatio(ratio);
+      row.tag.setPixelRatio(ratio);
+      row.time.setPixelRatio(ratio);
     }
   }
 

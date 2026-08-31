@@ -311,7 +311,10 @@ export class Race {
           this.fastestLapBy = craft;
         }
       }
-      if (craft.lap >= this.setup.laps) craft.finishTime = this.time;
+      if (craft.lap >= this.setup.laps) {
+        craft.finishTime = this.time;
+        craft.finishDistance = craft.distance;
+      }
     }
   }
 
