@@ -1,0 +1,172 @@
+import type { Camera, Scene } from 'three';
+import { PostProcessing, type Node, type WebGPURenderer } from 'three/webgpu';
+import { convertToTexture, float, mix, mrt, output, pass, uniform, vec2, velocity } from 'three/tsl';
+import { bloom } from 'three/addons/tsl/display/BloomNode.js';
+import { motionBlur } from 'three/addons/tsl/display/MotionBlur.js';
+import { traa } from 'three/addons/tsl/display/TRAANode.js';
+import { chromaticAberration } from 'three/addons/tsl/display/ChromaticAberrationNode.js';
+import { radialBlur } from 'three/addons/tsl/display/radialBlur.js';
+import { clamp01 } from './math';
+
+/** Linear luminance above which a pixel is treated as a light source. */
+const BLOOM_THRESHOLD = 1.6;
+
+export type QualityLevel = 'low' | 'medium' | 'high' | 'ultra';
+
+export interface PostFXQuality {
+  /** Temporal antialiasing. Off on low, where the cost is not worth it. */
+  antialias: boolean;
+  /** Velocity-buffer motion blur. */
+  motionBlur: boolean;
+  /** Samples the motion blur takes along the velocity vector. */
+  motionBlurSamples: number;
+  /** Speed-driven radial streaks and chromatic fringing. */
+  speedEffects: boolean;
+  bloomStrength: number;
+}
+
+export const QUALITY_PRESETS: Record<QualityLevel, PostFXQuality> = {
+  low: { antialias: false, motionBlur: false, motionBlurSamples: 8, speedEffects: false, bloomStrength: 0.2 },
+  medium: { antialias: false, motionBlur: true, motionBlurSamples: 10, speedEffects: true, bloomStrength: 0.26 },
+  high: { antialias: true, motionBlur: true, motionBlurSamples: 16, speedEffects: true, bloomStrength: 0.32 },
+  ultra: { antialias: true, motionBlur: true, motionBlurSamples: 24, speedEffects: true, bloomStrength: 0.36 },
+};
+
+/**
+ * The post chain, and the only place the game's sense of speed actually comes
+ * from.
+ *
+ * The scene pass writes colour and a velocity buffer in one go via MRT, which
+ * is what makes both the motion blur and the temporal antialiasing possible
+ * without re-rendering anything. Everything after that is a graph of TSL nodes
+ * compiled once at startup:
+ *
+ *   scene -> TRAA -> motion blur -> radial streaks -> + bloom -> aberration
+ *
+ * Three uniforms are driven every frame from the player's craft — speed, boost
+ * and impact — so the picture reacts to the driving rather than sitting at a
+ * fixed intensity. At a standstill the chain is nearly invisible; flat out in
+ * RAPIER class with a boost lit, the frame tears forward.
+ */
+export class PostFX {
+  private readonly post: PostProcessing;
+
+  /** 0..1 fraction of top speed. */
+  private readonly speed = uniform(0);
+  /** 1 while boosting, eased. */
+  private readonly boost = uniform(0);
+  private readonly aberrationStrength = uniform(0);
+  private readonly radialAmount = uniform(0);
+  private readonly bloomStrength = uniform(0.65);
+
+  private smoothedSpeed = 0;
+  private smoothedBoost = 0;
+
+  constructor(
+    renderer: WebGPURenderer,
+    scene: Scene,
+    camera: Camera,
+    quality: PostFXQuality = QUALITY_PRESETS.high,
+    overlay?: { scene: Scene; camera: Camera },
+  ) {
+    this.post = new PostProcessing(renderer);
+    this.bloomStrength.value = quality.bloomStrength;
+
+    const scenePass = pass(scene, camera);
+    // One geometry pass, two targets: shaded colour and screen-space motion.
+    scenePass.setMRT(mrt({ output, velocity }));
+
+    const colour = scenePass.getTextureNode('output');
+    const velocityTexture = scenePass.getTextureNode('velocity');
+    const depthTexture = scenePass.getTextureNode('depth');
+
+    // The addon nodes each return their own subclass; the chain only ever cares
+    // that the value is a vec4, so it is normalised to that as it is threaded
+    // through. `asColour` exists purely to keep the pipeline readable.
+    const asColour = (value: unknown): Node<'vec4'> => value as Node<'vec4'>;
+
+    let node = asColour(quality.antialias ? traa(colour, depthTexture, velocityTexture, camera) : colour);
+
+    // Motion blur runs before bloom, and on a resolved texture. Several of the
+    // addon nodes sample their input directly, so anything handed to them has to
+    // be a texture rather than an arbitrary expression — `convertToTexture`
+    // resolves the chain so far into one.
+    if (quality.motionBlur) {
+      node = asColour(motionBlur(convertToTexture(node), velocityTexture, float(quality.motionBlurSamples)));
+    }
+
+    if (quality.speedEffects) {
+      // Streaks pull outward from the centre of the screen, so they read as
+      // forward motion rather than as a camera shake.
+      const streaks = asColour(
+        radialBlur(convertToTexture(node), {
+          center: vec2(0.5, 0.5),
+          weight: float(0.55),
+          decay: float(0.94),
+          count: float(12),
+          exposure: float(1),
+        }),
+      );
+      node = asColour(mix(node, streaks, this.radialAmount));
+    }
+
+    // Bloom is added rather than mixed: the emissive trim, the pad chevrons and
+    // the thruster glow are already over 1.0, and adding keeps them reading as
+    // light sources instead of washing the concrete out with them.
+    // The scene pass is linear HDR, not tone-mapped, so the threshold has to sit
+    // well above 1: sunlit white concrete is already brighter than that, and a
+    // low threshold blooms the entire circuit into a white sheet.
+    node = asColour(node.add(bloom(node, this.bloomStrength, 0.7, BLOOM_THRESHOLD)));
+
+    if (quality.speedEffects) {
+      // The centre must be given explicitly: the addon defaults it to null and
+      // then tries to compile that as a shader input.
+      node = asColour(chromaticAberration(node, this.aberrationStrength, vec2(0.5, 0.5), float(1.06)));
+    }
+
+    if (overlay) {
+      // The HUD is composited here rather than drawn in a second render call:
+      // on WebGPU a second pass to the canvas begins with its own clear, which
+      // wipes the frame the post chain just produced. Bringing it in as a pass
+      // also keeps it out of the blur, which is the point of a separate layer.
+      // The overlay scene has no background, so its pass clears to the
+      // renderer's clear colour — which `Renderer` sets to fully transparent
+      // precisely so this composite works.
+      const overlayPass = pass(overlay.scene, overlay.camera);
+      const hudColour = overlayPass.getTextureNode('output');
+      node = asColour(mix(node, hudColour, hudColour.a));
+    }
+
+    this.post.outputNode = node;
+  }
+
+  /**
+   * Feeds this frame's driving state into the chain.
+   *
+   * The inputs are smoothed here rather than at the call site because the sim
+   * ticks faster than the display: an unsmoothed boost flag would make the
+   * effects flicker on and off between frames.
+   */
+  setDrive(speedFraction: number, boosting: boolean, dt: number): void {
+    const k = 1 - Math.exp(-dt * 6);
+    this.smoothedSpeed += (clamp01(speedFraction) - this.smoothedSpeed) * k;
+    this.smoothedBoost += ((boosting ? 1 : 0) - this.smoothedBoost) * (1 - Math.exp(-dt * 9));
+
+    this.speed.value = this.smoothedSpeed;
+    this.boost.value = this.smoothedBoost;
+
+    // Both effects stay at zero until well past half speed, so normal driving
+    // is clean and only the top of the range feels dangerous.
+    const intensity = clamp01((this.smoothedSpeed - 0.55) / 0.45);
+    this.aberrationStrength.value = intensity * 0.0022 + this.smoothedBoost * 0.004;
+    this.radialAmount.value = intensity * 0.22 + this.smoothedBoost * 0.34;
+  }
+
+  render(): void {
+    this.post.render();
+  }
+
+  dispose(): void {
+    this.post.dispose();
+  }
+}

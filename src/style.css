@@ -1,0 +1,95 @@
+:root {
+  --ink: #eef3f7;
+  --ink-dim: #8b97a3;
+  --accent: #24d4ff;
+  --panel: rgba(8, 12, 16, 0.72);
+  color-scheme: dark;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #05080b;
+  color: var(--ink);
+  font-family: 'Segoe UI', 'SF Pro Display', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+canvas#view {
+  display: block;
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+}
+
+/* Boot card, shown while the GPU device is coming up. */
+#boot {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  gap: 0.9rem;
+  justify-items: center;
+  background: #05080b;
+  z-index: 20;
+  transition: opacity 420ms ease;
+}
+
+#boot.hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+#boot-mark {
+  font-size: clamp(2.5rem, 9vw, 6rem);
+  font-weight: 200;
+  letter-spacing: 0.42em;
+  text-indent: 0.42em;
+  color: var(--ink);
+}
+
+#boot-status {
+  font-size: 0.72rem;
+  letter-spacing: 0.34em;
+  text-indent: 0.34em;
+  color: var(--ink-dim);
+}
+
+#boot-status.error {
+  color: #ff6b7d;
+  max-width: 34rem;
+  text-align: center;
+  letter-spacing: 0.1em;
+  text-indent: 0;
+  line-height: 1.6;
+}
+
+/* Performance overlay. Toggled with F3. */
+#perf {
+  position: fixed;
+  top: 0.75rem;
+  left: 0.75rem;
+  padding: 0.6rem 0.8rem;
+  background: var(--panel);
+  border-left: 2px solid var(--accent);
+  font: 400 11px/1.55 ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  color: var(--ink);
+  white-space: pre;
+  pointer-events: none;
+  z-index: 10;
+  backdrop-filter: blur(6px);
+}
+
+#perf[hidden] {
+  display: none;
+}
