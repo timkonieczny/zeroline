@@ -154,6 +154,8 @@ export class Craft {
   bestLap: number | null = null;
   /** Race time in seconds at the last line crossing. */
   lastLapAt = 0;
+  /** True once the craft has crossed the start line for the first time. */
+  hasStartedLap = false;
   /** The weapon currently held, or null. */
   weapon: HeldWeapon | null = null;
   /** Seconds until this craft can collect another weapon. */

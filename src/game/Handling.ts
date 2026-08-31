@@ -130,6 +130,8 @@ export interface HandlingProfile {
 
 /** Top speed of the reference craft in FLASH class, in m/s (~522 km/h). */
 const BASE_TOP_SPEED = 145;
+/** Linear drag, in 1/s. Stops a coasting craft rolling forever. */
+const DRAG_LINEAR = 0.18;
 
 export function buildHandling(team: Team, speedClass: SpeedClass): HandlingProfile {
   const { speed, thrust, handling, shield } = team.stats;
@@ -140,10 +142,13 @@ export function buildHandling(team: Team, speedClass: SpeedClass): HandlingProfi
   return {
     topSpeed,
     thrust: thrustAccel,
-    // Solving a = dragK * v^2 at v = topSpeed makes full thrust converge
-    // exactly on top speed, so the rating means what the meter says.
-    dragK: thrustAccel / (topSpeed * topSpeed),
-    dragLinear: 0.18,
+    // Terminal velocity is where thrust balances both drag terms:
+    //   thrust = dragK * v^2 + dragLinear * v
+    // Solving that at v = topSpeed is what makes the rating mean what the meter
+    // says. Ignoring the linear term here — as an earlier version did — leaves
+    // every craft about a fifth slower than its own specification.
+    dragK: (thrustAccel - DRAG_LINEAR * topSpeed) / (topSpeed * topSpeed),
+    dragLinear: DRAG_LINEAR,
     brakeDrag: lerp(0.9, 1.7, handling),
 
     turnRateLow: lerp(1.7, 2.9, handling),

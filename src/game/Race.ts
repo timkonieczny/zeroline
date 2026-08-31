@@ -284,11 +284,19 @@ export class Race {
       return;
     }
 
-    // The grid sits behind the line, so the first crossing completes lap one —
-    // the same convention every real standing start uses.
+    // The grid sits behind the line, and the first crossing starts lap one
+    // rather than completing it. Real motorsport counts the other way, but a
+    // three-lap race that is really two laps plus a run-up feels short, and
+    // this is the convention the genre uses.
     const lapDistance = this.track.length;
     const progressed = craft.distance - (this.startOffsets.get(craft) ?? 0);
-    const completed = progressed >= 0 ? Math.floor(progressed / lapDistance) + 1 : 0;
+    if (progressed >= 0 && !craft.hasStartedLap) {
+      // Lap timing starts at the line, so a best lap is a true flying lap
+      // rather than a lap plus however far the grid slot sat back.
+      craft.hasStartedLap = true;
+      craft.lastLapAt = this.time;
+    }
+    const completed = progressed >= 0 ? Math.floor(progressed / lapDistance) : 0;
     if (completed > craft.lap && craft.finishTime === null) {
       craft.lap = completed;
       const lapTime = this.time - craft.lastLapAt;
