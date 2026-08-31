@@ -13,7 +13,7 @@ import type { OptionRow } from '@/ui/OptionList';
 type Mode = 'menu' | 'race';
 
 /** Seconds the classification stays up before it dismisses itself. */
-const RESULTS_HOLD = 14;
+const RESULTS_HOLD = 20;
 /**
  * Seconds after the flag before a dismissal is accepted.
  *
@@ -24,7 +24,7 @@ const RESULTS_GRACE = 0.8;
 
 /** The menu does not need motion blur or speed streaks; it is not moving fast. */
 const MENU_QUALITY: PostFXQuality = {
-  antialias: true,
+  antialias: 'smaa',
   motionBlur: false,
   motionBlurSamples: 8,
   speedEffects: false,
@@ -145,7 +145,7 @@ export class App {
         this.renderer.renderer,
         this.race.scene,
         this.renderer.camera,
-        QUALITY_PRESETS[this.settings.quality],
+        { ...QUALITY_PRESETS[this.settings.quality], antialias: this.settings.antialias },
         { scene: this.race.hud.scene, camera: this.race.hud.camera },
       );
     }
@@ -190,8 +190,8 @@ export class App {
 
     if (race.finished) {
       this.finishedFor += step;
-      // The simulation keeps running underneath the classification so the AI
-      // cross the line and their live intervals resolve into real times.
+      // The world keeps moving underneath — as a looping replay now, not a live
+      // race — so there is something to watch while the table is up.
       if (this.finishedFor > RESULTS_HOLD && !this.leavingRace) this.dismissResults();
     }
   }
@@ -211,9 +211,17 @@ export class App {
         else this.audio.menuMove();
         this.menu.handle(action);
       } else if (this.race?.race.finished) {
-        // Any of confirm, back or pause takes the classification away, once it
-        // has had a moment to arrive.
-        if (this.finishedFor > RESULTS_GRACE && (action === 'confirm' || action === 'back' || action === 'pause')) {
+        // Tab or H tucks the classification away so the replay can be watched,
+        // and brings it back.
+        if (action === 'toggle') {
+          this.audio.menuMove();
+          this.race.hud.toggleResults();
+        } else if (
+          this.finishedFor > RESULTS_GRACE &&
+          (action === 'confirm' || action === 'back' || action === 'pause')
+        ) {
+          // Any of confirm, back or pause takes it away for good, once it has
+          // had a moment to arrive.
           this.audio.menuConfirm();
           this.dismissResults();
         }
@@ -278,6 +286,11 @@ export class App {
 
     return [
       { label: 'graphics', choices: qualities, index: qualities.indexOf(this.settings.quality) },
+      {
+        label: 'antialiasing',
+        choices: ['off', 'smaa', 'temporal'],
+        index: this.settings.antialias === 'none' ? 0 : this.settings.antialias === 'smaa' ? 1 : 2,
+      },
       { label: 'adaptive resolution', choices: ['off', 'on'], index: this.settings.adaptiveResolution ? 1 : 0 },
       { label: 'frame target', choices: ['60 fps', '120 fps'], index: this.settings.targetFps === 120 ? 1 : 0 },
       { label: 'master volume', choices: volumes, index: volumeIndex(this.settings.mix.master) },
@@ -293,6 +306,12 @@ export class App {
         // The post chain is compiled at construction, so a quality change takes
         // effect on the next race rather than mid-frame.
         this.applySettings({ quality: value as GameSettings['quality'] });
+        this.racePost?.dispose();
+        this.racePost = null;
+        break;
+      case 'antialiasing':
+        // Compiled into the chain, so it takes effect on the next race.
+        this.applySettings({ antialias: value === 'off' ? 'none' : value === 'smaa' ? 'smaa' : 'traa' });
         this.racePost?.dispose();
         this.racePost = null;
         break;

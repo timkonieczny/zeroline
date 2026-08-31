@@ -5,6 +5,8 @@ import { TextMesh, panelMaterial } from '@/ui/Text';
 import type { Race } from './Race';
 import { WEAPONS } from './weapons/Weapons';
 import { ResultsTable, formatTime } from './Results';
+import { Minimap } from './Minimap';
+import type { Track } from '@/track/Track';
 import { clamp01, lerp } from '@/core/math';
 
 /** Layout margin from the screen edge, in pixels. */
@@ -15,10 +17,23 @@ const BAR_HEIGHT = 9;
 
 /** Peak darkening of the scrims, against the screen edge. */
 const SCRIM_STRENGTH = 0.6;
+/**
+ * Seconds the finishing position is held on its own before the classification
+ * arrives. The table is the detail; the placard is the answer.
+ */
+const PLACARD_TIME = 3;
 
 const INK = 0xf2f6fa;
 const DIM = 0x8b97a3;
 const WARN = 0xff3d5e;
+
+/** "1ST", "2ND", "3RD"... for the finishing placard. */
+function ordinal(position: number): string {
+  const tens = position % 100;
+  if (tens >= 11 && tens <= 13) return `${position}th`;
+  const suffix = ['th', 'st', 'nd', 'rd'][position % 10] ?? 'th';
+  return `${position}${suffix}`;
+}
 
 /**
  * The in-race HUD, drawn as a flat scene on top of the finished frame.
@@ -39,6 +54,7 @@ export class Hud {
 
   private readonly root = new Group();
   private readonly results: ResultsTable;
+  private readonly minimap: Minimap;
   /** Fades the racing readouts down while the classification is up. */
   private raceChrome = 1;
 
@@ -70,11 +86,18 @@ export class Hud {
 
   private width = 1;
   private height = 1;
+  /** Seconds since the flag fell, used to time the finishing sequence. */
+  private finishedFor = 0;
+  /** Set while the player has asked for the table to be out of the way. */
+  private tableHidden = false;
 
-  constructor(pixelRatio: number) {
+  constructor(pixelRatio: number, track: Track, fieldSize: number) {
     this.scene.add(this.root);
     this.results = new ResultsTable(pixelRatio);
     this.scene.add(this.results.group);
+
+    this.minimap = new Minimap(track, fieldSize);
+    this.root.add(this.minimap.group);
 
     this.speedValue = new TextMesh('0', { size: 78, weight: 200, tracking: 0.02, align: 'right' }, pixelRatio);
     this.speedUnit = new TextMesh('km/h', { size: 15, weight: 500, tracking: 0.42, align: 'right' }, pixelRatio);
@@ -128,8 +151,12 @@ export class Hud {
       this.shieldTrack,
       this.shieldFill,
       this.weaponPanel,
-      this.centreMessage,
     );
+
+    // The placard lives outside the racing chrome. Everything in `root` is
+    // hidden wholesale once the flag is out, and the finishing position is the
+    // one thing that has to survive that.
+    this.scene.add(this.centreMessage);
   }
 
   /** Sizes the overlay to the viewport, in CSS pixels. */
@@ -164,6 +191,9 @@ export class Hud {
 
   private layout(): void {
     const { width, height } = this;
+
+    // Top centre, clear of the lap counter and the race clock.
+    this.minimap.group.position.set(width / 2, height - MARGIN - this.minimap.extent.y / 2 - 8, 0);
 
     const scrimHeight = Math.min(230, height * 0.3);
     this.scrimTop.scale.set(width, scrimHeight, 1);
@@ -234,14 +264,27 @@ export class Hud {
       this.weaponName.setColour(def.kind === 'offensive' ? 0xff8a5c : def.kind === 'defensive' ? 0x6ce8ff : 0xffd76b);
     }
 
-    // The classification takes over once the flag is out.
-    if (race.finished) this.results.show();
+    this.minimap.update(race.craft, player);
+
+    // The flag: the placard alone for a few seconds, then the classification.
+    if (race.finished) {
+      this.finishedFor += dt;
+      if (this.finishedFor > PLACARD_TIME && !this.tableHidden) this.results.show();
+    } else {
+      this.finishedFor = 0;
+    }
     this.results.update(race, dt, this.width, this.height);
 
     // Racing readouts fade out under the classification. The bars and scrims
     // are plain meshes with no text opacity, so the whole group is hidden once
     // the fade has run rather than being left at a residual alpha.
-    this.raceChrome = lerp(this.raceChrome, race.finished ? 0 : 1, 1 - Math.exp(-dt * 7));
+    // The readouts stay up through the placard — the scrims are what give it
+    // contrast against a bright sky, and a driver who has just crossed the line
+    // still wants to see the lap and the speed. They step aside only once the
+    // table arrives, and come back if it is tucked away to watch the replay.
+    const tableUp = race.finished && this.finishedFor > PLACARD_TIME && !this.tableHidden;
+    const wantChrome = tableUp ? 0 : 1;
+    this.raceChrome = lerp(this.raceChrome, wantChrome, 1 - Math.exp(-dt * 7));
     this.root.visible = this.raceChrome > 0.02;
     for (const mesh of [
       this.speedValue,
@@ -258,19 +301,24 @@ export class Hud {
     this.weaponName.setOpacity(this.weaponSlide * this.raceChrome);
     this.weaponHint.setOpacity(this.weaponSlide * 0.85 * this.raceChrome);
 
-    // Centre message: the countdown, and the lights going out.
+    // Centre message: the countdown, the lights going out, then the placard.
     let message = '';
+    let placard = false;
     if (race.phase === 'countdown') {
       const remaining = Math.ceil(race.countdown);
       message = remaining > 0 ? String(remaining) : 'GO';
+    } else if (race.finished && this.finishedFor < PLACARD_TIME + 0.4 && !this.tableHidden) {
+      message = ordinal(player.position);
+      placard = true;
     } else if (race.time < 1.2) {
       message = 'GO';
     }
     const targetOpacity = message ? 1 : 0;
     this.centreOpacity = lerp(this.centreOpacity, targetOpacity, 1 - Math.exp(-dt * 8));
     if (message) this.centreMessage.setText(message);
-    this.centreMessage.setColour(critical ? WARN : INK, 1);
-    this.centreMessage.setOpacity(this.centreOpacity * this.raceChrome);
+    this.centreMessage.setColour(placard ? (player.position === 1 ? 0xffd76b : INK) : critical ? WARN : INK, 1);
+    // The placard is the one thing that must not fade with the racing chrome.
+    this.centreMessage.setOpacity(this.centreOpacity * (placard ? 1 : this.raceChrome));
     const pop = 1 + (1 - this.centreOpacity) * 0.25;
     this.centreMessage.scale.setScalar(pop);
   }
@@ -278,6 +326,21 @@ export class Hud {
   /** Starts the classification's dismissal animation. */
   hideResults(): void {
     this.results.hide();
+  }
+
+  /**
+   * Toggles the classification out of the way so the replay can be watched,
+   * and back again. Returns true if the table is now hidden.
+   */
+  toggleResults(): boolean {
+    this.tableHidden = !this.tableHidden;
+    if (this.tableHidden) this.results.conceal();
+    else this.results.restore();
+    return this.tableHidden;
+  }
+
+  get resultsConcealed(): boolean {
+    return this.tableHidden;
   }
 
   /** True once the classification has finished animating away. */
@@ -289,6 +352,8 @@ export class Hud {
   resetResults(): void {
     this.results.reset();
     this.raceChrome = 1;
+    this.finishedFor = 0;
+    this.tableHidden = false;
   }
 
   /**
@@ -312,6 +377,7 @@ export class Hud {
 
   dispose(): void {
     this.results.dispose();
+    this.minimap.dispose();
     this.scene.traverse((object) => {
       if (object instanceof TextMesh) object.dispose();
       else if (object instanceof Mesh) {

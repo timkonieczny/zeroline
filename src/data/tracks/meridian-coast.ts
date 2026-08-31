@@ -81,13 +81,15 @@ export const meridianCoast: TrackDefinition = {
     azimuth: 132,
     elevation: 46,
     colour: 0xfff2dc,
-    intensity: 2.9,
+    intensity: 3.3,
   },
 
   sky: {
-    horizon: 0xe6eef6,
-    zenith: 0x4c8fd8,
-    ground: 0xa9b6c2,
-    fogDensity: 0.00035,
+    horizon: 0xdff0ff,
+    // A deeper, more saturated zenith. This is a utopian league in high summer,
+    // not an overcast test session.
+    zenith: 0x1f6fd8,
+    ground: 0x8fb4c9,
+    fogDensity: 0.00032,
   },
 };

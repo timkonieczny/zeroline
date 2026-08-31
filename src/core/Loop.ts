@@ -11,6 +11,16 @@
  * moment of simulated time than to spend a second running a hundred ticks and
  * stall again.
  */
+/**
+ * Longest step handed to the renderer, in seconds.
+ *
+ * The simulation already caps how much it will catch up; this does the same for
+ * everything that eases on frame time. Without it, any hitch — a tab regaining
+ * focus, a shader compiling, a race settling at the flag — arrives as a single
+ * multi-second step and every animation in the game teleports to its end state.
+ */
+const MAX_RENDER_STEP = 0.1;
+
 export class Loop {
   /** Simulation ticks per second. */
   readonly rate: number;
@@ -77,6 +87,8 @@ export class Loop {
     this.ticksLastFrame = ticks;
     this.alpha = this.accumulator / this.step;
 
-    this.onRender(this.alpha, elapsed);
+    // `frameTime` above keeps the true elapsed time for the perf overlay; what
+    // the renderer animates against is clamped.
+    this.onRender(this.alpha, Math.min(elapsed, MAX_RENDER_STEP));
   };
 }

@@ -33,6 +33,7 @@ path and none is planned.
 | Look back | `C` | Left trigger |
 | Pitch, airborne | `R` / `F` | Left stick vertical |
 | Pause | `Esc` | Start |
+| Hide / show results | `Tab` or `H` | Y / triangle |
 | Performance overlay | `F3` | — |
 
 Airbrakes are the whole game. Steering alone will not get a fast craft through T6.
@@ -67,20 +68,28 @@ into shield energy instead — which is often the better call.
 
 ## After the flag
 
-The final classification: position, constructor and time to the millisecond, with your row picked
-out. It stays live while it is up — the race carries on behind it, so an AI still on its last lap
-shows an interval that resolves into a real finishing time as it crosses the line. `Enter` to
-dismiss, or it dismisses itself after fourteen seconds.
+Your finishing position lands on its own for three seconds, then the classification slides in:
+position, constructor and time to the millisecond, with your row picked out. The rest of the
+field is run through to the flag at that moment, so every row is a real time rather than a
+projection.
+
+The controls go dead and the race behind you becomes a **looping replay** of the one you just
+drove. `Tab` (or `H`) tucks the table away if you would rather watch it; `Enter` returns to the
+menu, and it returns on its own after twenty seconds.
 
 ## Settings
 
-`SETTINGS` from the main menu, adjusted with left and right. Graphics quality, adaptive
-resolution, frame target, and three volume faders. Everything is stored in local storage and
-survives a reload.
+`SETTINGS` from the main menu, adjusted with left and right. Graphics quality, antialiasing,
+adaptive resolution, frame target, and three volume faders. Everything is stored in local storage
+and survives a reload.
 
 The game always renders at the display's real pixel density. Adaptive resolution is a separate
-multiplier layered on top of native — it trades sharpness for frame rate under load, and never
-locks you to a non-native image.
+multiplier layered on top of native — it trades sharpness for frame rate under load, and it is
+**off by default**, because dropping below your display's real resolution should be a choice.
+
+Antialiasing defaults to SMAA. Temporal antialiasing is available and resolves subpixel detail
+better, but it is softer and its per-frame jitter ends up in the velocity buffer that the motion
+blur reads, so the blur wobbles. SMAA is sharper and stable.
 
 ## Sound
 

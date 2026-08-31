@@ -84,6 +84,12 @@ tests/       Vitest suites for the simulation
 - **`core/Audio.ts`** — every sound synthesised at runtime. No files, same as the visuals.
   `game/AudioDirector.ts` watches race state for edges and turns them into sound, so the
   simulation stays free of side effects and a replay cannot double-trigger anything.
+- **`game/Replay.ts`** — pose and speed for every craft at 30 Hz, played back on a loop once the
+  flag is out. Playback writes into the craft's own state, so the camera, the models and the
+  engine note cannot tell the difference between being driven and being replayed.
+- **`game/RaceStage.ts`** — `settleField()` runs the rest of the field to the flag in one go when
+  the player crosses. Without it the classification freezes on projected intervals that do not
+  even sort in the same order as the positions beside them.
 
 ## Things that were slow, and why they are not any more
 
@@ -96,6 +102,15 @@ Both were found by measurement, and both would be easy to reintroduce:
 - **The collision query's search window** was sized for sixty metres of travel per tick. A
   craft covers under two at RAPIER speed. Narrowing it to fifteen made the headless test suite
   three times faster and changed no lap time by a millisecond.
+
+## Two things that are easy to get wrong twice
+
+- **Never let an animation take a real frame's `dt`.** `Loop` clamps what it hands the renderer
+  to 100 ms. A hitch — a tab regaining focus, a shader compiling, the field settling at the flag
+  — otherwise arrives as one multi-second step and every eased value in the game teleports.
+- **A saturated sky is a terrible bounce light.** The visual sky can be as vivid as it likes, but
+  the hemisphere fill takes a washed-out version of it. Feeding the zenith in directly puts a
+  blue cast on every white surface and the circuit stops reading as concrete.
 
 ## Conventions
 

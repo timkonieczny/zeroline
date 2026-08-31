@@ -147,10 +147,16 @@ export class ResultsTable {
   private readonly panelOpacity = uniform(0);
   private readonly ruleOpacity = uniform(0);
 
-  /** 0 hidden, 1 fully shown. Eased toward `target`. */
+  /** 0 hidden, 1 fully shown. Eased toward the effective target. */
   private reveal = 0;
-  private target = 0;
   private rowCount = 0;
+  /** True once the race has finished and the table has been asked for. */
+  private wanted = false;
+  /**
+   * True while the player has tucked the table away to watch the replay. Unlike
+   * a dismissal this is reversible, so it is tracked separately.
+   */
+  private concealed = false;
   /**
    * Set once the player has dismissed the table, and cleared only by `reset`.
    *
@@ -186,7 +192,7 @@ export class ResultsTable {
     this.rule = new Mesh(new PlaneGeometry(1, 1), ResultsTable.fadeMaterial(0x2c3945, this.ruleOpacity));
     this.rule.renderOrder = 5;
 
-    this.footer = text('enter continue', 11, 500, 0.42, 'centre');
+    this.footer = text('tab hide  ·  enter continue', 11, 500, 0.42, 'centre');
     this.footer.setColour(DIM);
 
     this.group.add(
@@ -257,20 +263,36 @@ export class ResultsTable {
     return this.target === 0 && this.reveal < 0.01;
   }
 
+  /** The table should be on screen unless something says otherwise. */
+  private get target(): number {
+    return this.wanted && !this.dismissRequested && !this.concealed ? 1 : 0;
+  }
+
   show(): void {
     if (this.dismissRequested) return;
-    this.target = 1;
+    this.wanted = true;
     this.group.visible = true;
+  }
+
+  /** Tucks the table away, reversibly. */
+  conceal(): void {
+    this.concealed = true;
+  }
+
+  /** Brings a concealed table back. */
+  restore(): void {
+    this.concealed = false;
+    if (this.wanted && !this.dismissRequested) this.group.visible = true;
   }
 
   hide(): void {
     this.dismissRequested = true;
-    this.target = 0;
   }
 
   reset(): void {
     this.dismissRequested = false;
-    this.target = 0;
+    this.concealed = false;
+    this.wanted = false;
     this.reveal = 0;
     this.group.visible = false;
   }

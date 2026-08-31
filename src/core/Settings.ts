@@ -1,9 +1,11 @@
 import { DEFAULT_MIX, type AudioMix } from './Audio';
-import type { QualityLevel } from './PostFX';
+import type { AntialiasMode, QualityLevel } from './PostFX';
 import { clamp01 } from './math';
 
 export interface GameSettings {
   quality: QualityLevel;
+  /** Overrides the quality preset's antialiasing. */
+  antialias: AntialiasMode;
   /** Drop resolution under load to hold the frame budget. */
   adaptiveResolution: boolean;
   /** Frame rate the adaptive scaler aims for. */
@@ -13,7 +15,11 @@ export interface GameSettings {
 
 export const DEFAULT_SETTINGS: GameSettings = {
   quality: 'high',
-  adaptiveResolution: true,
+  antialias: 'smaa',
+  // Off by default. Dropping below the display's real pixel density is a
+  // visible cost, and it should be a choice rather than something that quietly
+  // happens the first time a frame runs long.
+  adaptiveResolution: false,
   targetFps: 60,
   mix: { ...DEFAULT_MIX },
 };
@@ -35,6 +41,7 @@ export function loadSettings(): GameSettings {
     const parsed = JSON.parse(raw) as Partial<GameSettings>;
     return {
       quality: isQuality(parsed.quality) ? parsed.quality : DEFAULT_SETTINGS.quality,
+      antialias: isAntialias(parsed.antialias) ? parsed.antialias : DEFAULT_SETTINGS.antialias,
       adaptiveResolution:
         typeof parsed.adaptiveResolution === 'boolean'
           ? parsed.adaptiveResolution
@@ -62,6 +69,10 @@ export function saveSettings(settings: GameSettings): void {
 
 function isQuality(value: unknown): value is QualityLevel {
   return value === 'low' || value === 'medium' || value === 'high' || value === 'ultra';
+}
+
+function isAntialias(value: unknown): value is AntialiasMode {
+  return value === 'none' || value === 'smaa' || value === 'traa';
 }
 
 function volume(value: unknown, fallback: number): number {

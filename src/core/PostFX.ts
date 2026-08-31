@@ -4,6 +4,7 @@ import { convertToTexture, float, mix, mrt, output, pass, uniform, vec2, velocit
 import { bloom } from 'three/addons/tsl/display/BloomNode.js';
 import { motionBlur } from 'three/addons/tsl/display/MotionBlur.js';
 import { traa } from 'three/addons/tsl/display/TRAANode.js';
+import { smaa } from 'three/addons/tsl/display/SMAANode.js';
 import { chromaticAberration } from 'three/addons/tsl/display/ChromaticAberrationNode.js';
 import { radialBlur } from 'three/addons/tsl/display/radialBlur.js';
 import { clamp01 } from './math';
@@ -13,9 +14,21 @@ const BLOOM_THRESHOLD = 1.6;
 
 export type QualityLevel = 'low' | 'medium' | 'high' | 'ultra';
 
+/**
+ * Which antialiasing to run, if any.
+ *
+ * `smaa` is the default rather than `traa`. Temporal antialiasing jitters the
+ * projection every frame and resolves against a history buffer, which on this
+ * game's content — thin white kerb stripes and barrier trim crossing the frame
+ * at 500 km/h — reads as a permanently soft image, and its jitter lands in the
+ * velocity buffer that the motion blur then smears along, so the blur wobbles
+ * from frame to frame. SMAA is purely spatial: sharper, stable, and it leaves
+ * the velocity buffer alone.
+ */
+export type AntialiasMode = 'none' | 'smaa' | 'traa';
+
 export interface PostFXQuality {
-  /** Temporal antialiasing. Off on low, where the cost is not worth it. */
-  antialias: boolean;
+  antialias: AntialiasMode;
   /** Velocity-buffer motion blur. */
   motionBlur: boolean;
   /** Samples the motion blur takes along the velocity vector. */
@@ -26,11 +39,24 @@ export interface PostFXQuality {
 }
 
 export const QUALITY_PRESETS: Record<QualityLevel, PostFXQuality> = {
-  low: { antialias: false, motionBlur: false, motionBlurSamples: 8, speedEffects: false, bloomStrength: 0.2 },
-  medium: { antialias: false, motionBlur: true, motionBlurSamples: 10, speedEffects: true, bloomStrength: 0.26 },
-  high: { antialias: true, motionBlur: true, motionBlurSamples: 16, speedEffects: true, bloomStrength: 0.32 },
-  ultra: { antialias: true, motionBlur: true, motionBlurSamples: 24, speedEffects: true, bloomStrength: 0.36 },
+  low: { antialias: 'none', motionBlur: false, motionBlurSamples: 8, speedEffects: false, bloomStrength: 0.2 },
+  medium: { antialias: 'smaa', motionBlur: true, motionBlurSamples: 10, speedEffects: true, bloomStrength: 0.26 },
+  high: { antialias: 'smaa', motionBlur: true, motionBlurSamples: 16, speedEffects: true, bloomStrength: 0.32 },
+  ultra: { antialias: 'smaa', motionBlur: true, motionBlurSamples: 24, speedEffects: true, bloomStrength: 0.36 },
 };
+
+/**
+ * Frame time the motion blur is calibrated for, in seconds.
+ *
+ * The velocity buffer holds motion *since the last rendered frame*, so its
+ * length scales with frame time: at 30 fps every smear is twice as long as at
+ * 60, and an uneven frame rate makes the blur pulse. Normalising against a
+ * fixed reference turns it into a shutter angle — blur length then tracks
+ * speed, which is what it is supposed to communicate, and nothing else.
+ */
+const BLUR_REFERENCE_FRAME = 1 / 60;
+/** Hard cap on the normalising factor, so one long frame cannot smear the world. */
+const BLUR_SCALE_MAX = 1.6;
 
 /**
  * The post chain, and the only place the game's sense of speed actually comes
@@ -41,7 +67,7 @@ export const QUALITY_PRESETS: Record<QualityLevel, PostFXQuality> = {
  * without re-rendering anything. Everything after that is a graph of TSL nodes
  * compiled once at startup:
  *
- *   scene -> TRAA -> motion blur -> radial streaks -> + bloom -> aberration
+ *   scene -> antialias -> motion blur -> radial streaks -> + bloom -> aberration
  *
  * Three uniforms are driven every frame from the player's craft — speed, boost
  * and impact — so the picture reacts to the driving rather than sitting at a
@@ -58,6 +84,9 @@ export class PostFX {
   private readonly aberrationStrength = uniform(0);
   private readonly radialAmount = uniform(0);
   private readonly bloomStrength = uniform(0.65);
+  /** Normalises the velocity buffer against a fixed reference frame time. */
+  private readonly blurScale = uniform(1);
+  private smoothedBlurScale = 1;
 
   private smoothedSpeed = 0;
   private smoothedBoost = 0;
@@ -85,14 +114,19 @@ export class PostFX {
     // through. `asColour` exists purely to keep the pipeline readable.
     const asColour = (value: unknown): Node<'vec4'> => value as Node<'vec4'>;
 
-    let node = asColour(quality.antialias ? traa(colour, depthTexture, velocityTexture, camera) : colour);
+    let node = asColour(colour);
+    if (quality.antialias === 'traa') node = asColour(traa(colour, depthTexture, velocityTexture, camera));
+    else if (quality.antialias === 'smaa') node = asColour(smaa(colour));
 
     // Motion blur runs before bloom, and on a resolved texture. Several of the
     // addon nodes sample their input directly, so anything handed to them has to
     // be a texture rather than an arbitrary expression — `convertToTexture`
     // resolves the chain so far into one.
     if (quality.motionBlur) {
-      node = asColour(motionBlur(convertToTexture(node), velocityTexture, float(quality.motionBlurSamples)));
+      // `.xy` explicitly: the velocity target is a vec4 and the blur adds the
+      // offset to a vec2 UV.
+      const motion = velocityTexture.xy.mul(this.blurScale);
+      node = asColour(motionBlur(convertToTexture(node), motion, float(quality.motionBlurSamples)));
     }
 
     if (quality.speedEffects) {
@@ -148,6 +182,12 @@ export class PostFX {
    * effects flicker on and off between frames.
    */
   setDrive(speedFraction: number, boosting: boolean, dt: number): void {
+    // Keep the smear a fixed shutter rather than a fixed number of frames, and
+    // ease it so a single long frame does not produce a visible lurch.
+    const target = Math.min(BLUR_SCALE_MAX, BLUR_REFERENCE_FRAME / Math.max(dt, 1e-4));
+    this.smoothedBlurScale += (target - this.smoothedBlurScale) * (1 - Math.exp(-dt * 8));
+    this.blurScale.value = this.smoothedBlurScale;
+
     const k = 1 - Math.exp(-dt * 6);
     this.smoothedSpeed += (clamp01(speedFraction) - this.smoothedSpeed) * k;
     this.smoothedBoost += ((boosting ? 1 : 0) - this.smoothedBoost) * (1 - Math.exp(-dt * 9));

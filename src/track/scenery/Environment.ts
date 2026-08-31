@@ -75,7 +75,13 @@ export class Environment {
 
     // Fill only. The sun does the shaping; this stops surfaces facing away from
     // it from going to black, which is what an unlit barrier looked like.
-    this.ambient = new HemisphereLight(new Color(sky.zenith), new Color(sky.ground), 0.75);
+    //
+    // The fill is a washed-out version of the sky rather than the sky itself. A
+    // saturated zenith makes a beautiful backdrop and a terrible bounce light:
+    // taken literally it puts a blue cast on every white surface in the world,
+    // and the circuit stops reading as white concrete.
+    const fill = new Color(sky.zenith).lerp(new Color(0xffffff), 0.55);
+    this.ambient = new HemisphereLight(fill, new Color(sky.ground), 0.8);
 
     this.sky = new Mesh(new SphereGeometry(SKY_RADIUS, 32, 20), Environment.skyMaterial(track.definition));
     this.sky.name = 'sky';
@@ -113,7 +119,7 @@ export class Environment {
     probeScene.remove(probeSky);
 
     scene.environment = this.environmentMap;
-    scene.environmentIntensity = 0.6;
+    scene.environmentIntensity = 0.42;
   }
 
   /**
@@ -170,8 +176,8 @@ export class Environment {
   private static seaMaterial(definition: TrackDefinition): MeshStandardNodeMaterial {
     const material = new MeshStandardNodeMaterial();
     const distance = uv().sub(0.5).length().mul(2);
-    const deep = color(0x274a63);
-    const far = color(definition.sky.horizon).mul(0.82);
+    const deep = color(0x1d7fa8);
+    const far = color(definition.sky.horizon).mul(0.86);
     material.colorNode = mix(deep, far, smoothstep(float(0.03), float(0.5), distance));
     // Kept non-metallic on purpose: there is no environment map to reflect, and
     // a metal without one renders as a black hole where the sea should be.

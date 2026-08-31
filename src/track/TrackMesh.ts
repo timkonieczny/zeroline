@@ -110,7 +110,7 @@ export class TrackMesh {
       { anchor: 'centre', offset: 0, up: 0, u: 0 },
       { anchor: 'right', offset: KERB_WIDTH, up: 0, u: 1 },
     ];
-    return buildRibbon(this.track, { profile, step: 2, vScale: ROAD_V_SCALE });
+    return buildRibbon(this.track, { profile, step: 2, vScale: ROAD_V_SCALE, colourByDistrict: true });
   }
 
   private buildKerbs(): BufferGeometry {
@@ -209,9 +209,17 @@ export class TrackMesh {
 
   // --- Materials ----------------------------------------------------------
 
-  /** Pale concrete with crisp painted edge lines and expansion joints. */
+  /**
+   * Pale concrete, a white edge line, and a broad band of the district's colour
+   * running just inboard of it.
+   *
+   * The band is the single biggest thing keeping the circuit from reading grey.
+   * A league like this paints its surfaces; the road is the largest surface
+   * there is, and leaving it bare concrete wastes it.
+   */
   private static roadMaterial(): MeshStandardNodeMaterial {
     const material = new MeshStandardNodeMaterial();
+    const accent = attribute<'vec4'>('color', 'vec4');
     const across = uv().x;
     const along = uv().y;
 
@@ -219,14 +227,23 @@ export class TrackMesh {
     const paint = smoothstep(float(0.07), float(0.055), edgeDistance).mul(
       smoothstep(float(0.018), float(0.03), edgeDistance),
     );
+    // Colour band sitting inboard of the white line. Paint, not a light strip:
+    // the trim along the barrier tops is the circuit's light source, and a
+    // second glowing line at road level flattens the whole picture.
+    const band = smoothstep(float(0.16), float(0.14), edgeDistance).mul(
+      smoothstep(float(0.08), float(0.095), edgeDistance),
+    );
 
     const seam = fract(along);
     const joint = smoothstep(float(0.022), float(0), min(seam, oneMinus(seam)));
 
-    const surface = mix(color(0x9aa1a8), color(0x767d84), abs(across).mul(0.6));
-    const withJoint = mix(surface, color(0x5c6167), joint.mul(0.7));
-    material.colorNode = mix(withJoint, color(0xf4f6f8), paint);
-    material.roughnessNode = mix(float(0.72), float(0.45), paint);
+    // Lighter than before. Under a hard sun this reads as pale concrete rather
+    // than as asphalt, and it gives the paint something to sit against.
+    const surface = mix(color(0xb9c1c9), color(0x98a1a9), abs(across).mul(0.55));
+    const withBand = mix(surface, accent.xyz.mul(0.5), band);
+    const withJoint = mix(withBand, color(0x808990), joint.mul(0.55));
+    material.colorNode = mix(withJoint, color(0xf6f8fa), paint);
+    material.roughnessNode = mix(float(0.7), float(0.5), paint.add(band));
     material.metalnessNode = float(0.02);
     return material;
   }
@@ -242,17 +259,33 @@ export class TrackMesh {
     return material;
   }
 
-  /** White barrier panels with a recessed seam every panel width. */
+  /**
+   * White barrier panels, seamed, with long blocks of the district's colour.
+   *
+   * The blocks run several panels at a time rather than alternating per panel:
+   * at 500 km/h a fine pattern is a grey blur, and only a colour field big
+   * enough to last half a second actually registers as colour.
+   */
   private static wallMaterial(): MeshStandardNodeMaterial {
     const material = new MeshStandardNodeMaterial();
+    const accent = attribute<'vec4'>('color', 'vec4');
     const height = uv().x;
     const along = uv().y;
 
     const seam = fract(along);
     const panel = smoothstep(float(0.03), float(0), min(seam, oneMinus(seam)));
-    const base = mix(color(0xe8ecef), color(0xbcc3c9), height.mul(0.35));
-    material.colorNode = mix(base, color(0x8d959c), panel.mul(0.8));
-    material.roughnessNode = float(0.5);
+
+    // One block every eight panels, covering the lower two thirds of the wall.
+    const run = fract(along.mul(0.125));
+    const block = smoothstep(float(0.46), float(0.4), run)
+      .mul(smoothstep(float(0.04), float(0.1), run))
+      .mul(smoothstep(float(0.72), float(0.64), height));
+
+    const base = mix(color(0xeff3f6), color(0xc6cdd3), height.mul(0.3));
+    const painted = mix(base, accent.xyz.mul(0.8), block);
+    material.colorNode = mix(painted, color(0x8d959c), panel.mul(0.7));
+    material.emissiveNode = accent.xyz.mul(block).mul(0.1);
+    material.roughnessNode = mix(float(0.5), float(0.34), block);
     material.metalnessNode = float(0.05);
     return material;
   }

@@ -3,7 +3,7 @@ import type { InputSnapshot } from '@/game/InputSnapshot';
 import { createInputSnapshot, resetInputSnapshot } from '@/game/InputSnapshot';
 
 /** Discrete actions the menu listens for. */
-export type MenuAction = 'up' | 'down' | 'left' | 'right' | 'confirm' | 'back' | 'pause';
+export type MenuAction = 'up' | 'down' | 'left' | 'right' | 'confirm' | 'back' | 'pause' | 'toggle';
 
 /** Seconds a shoulder tap stays "recent" for a double-tap to register. */
 const DOUBLE_TAP_WINDOW = 0.26;
@@ -54,6 +54,8 @@ export const KEY_BINDINGS = {
   pause: [],
   confirm: ['Enter', 'Space', 'NumpadEnter'],
   back: ['Escape', 'Backspace'],
+  /** Shows and hides the classification, so the replay can be watched. */
+  toggle: ['Tab', 'KeyH'],
 } as const;
 
 /**
@@ -308,6 +310,7 @@ export class Input {
     enqueue('confirm', this.pressCount(KEY_BINDINGS.confirm) + (padEdge(PAD.south) ? 1 : 0));
     enqueue('back', this.pressCount(KEY_BINDINGS.back) + (padEdge(PAD.east) ? 1 : 0));
     enqueue('pause', this.pressCount(KEY_BINDINGS.pause) + (padEdge(PAD.start) ? 1 : 0));
+    enqueue('toggle', this.pressCount(KEY_BINDINGS.toggle) + (padEdge(PAD.north) ? 1 : 0));
   }
 
   /** Takes the next queued menu action, or null. */
