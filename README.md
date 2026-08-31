@@ -65,6 +65,13 @@ What you draw depends on where you are running: the leader gets defensive and ut
 back of the field gets the heavy ordnance. Holding `Shift` throws the weapon away and converts it
 into shield energy instead — which is often the better call.
 
+## After the flag
+
+The final classification: position, constructor and time to the millisecond, with your row picked
+out. It stays live while it is up — the race carries on behind it, so an AI still on its last lap
+shows an interval that resolves into a real finishing time as it crosses the line. `Enter` to
+dismiss, or it dismisses itself after fourteen seconds.
+
 ## Settings
 
 `SETTINGS` from the main menu, adjusted with left and right. Graphics quality, adaptive

@@ -72,6 +72,7 @@ export class RaceStage {
     this.race = new Race({ ...setup, track: this.track });
     this.buildField();
     this.chase.reset();
+    this.hud.resetResults();
   }
 
   private buildField(): void {

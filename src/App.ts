@@ -13,6 +13,9 @@ import type { OptionRow } from '@/ui/OptionList';
 type Mode = 'menu' | 'race';
 
 /** The menu does not need motion blur or speed streaks; it is not moving fast. */
+/** Seconds the classification stays up before it dismisses itself. */
+const RESULTS_HOLD = 14;
+
 const MENU_QUALITY: PostFXQuality = {
   antialias: true,
   motionBlur: false,
@@ -40,10 +43,13 @@ export class App {
 
   private menuPost: PostFX | null = null;
   private racePost: PostFX | null = null;
-  private race: RaceStage | null = null;
+  /** The live race stage, exposed so a dev console can inspect it. */
+  race: RaceStage | null = null;
   private mode: Mode = 'menu';
-  /** Seconds since the race finished, used to hold the results before returning. */
+  /** Seconds since the race finished, used to hold the classification up. */
   private finishedFor = 0;
+  /** True once the classification is animating away and the menu is next. */
+  private leavingRace = false;
 
   private readonly perf: HTMLElement;
   private perfTimer = 0;
@@ -138,6 +144,7 @@ export class App {
     }
 
     this.finishedFor = 0;
+    this.leavingRace = false;
     this.mode = 'race';
     this.input.clearMenuActions();
 
@@ -154,8 +161,16 @@ export class App {
     return grid;
   }
 
+  /** Plays the classification out, then hands the player back to the menu. */
+  private dismissResults(): void {
+    if (this.leavingRace || !this.race) return;
+    this.leavingRace = true;
+    this.race.hud.hideResults();
+  }
+
   private returnToMenu(): void {
     this.mode = 'menu';
+    this.leavingRace = false;
     this.input.clearMenuActions();
     this.audio.stopEngine();
   }
@@ -168,8 +183,9 @@ export class App {
 
     if (race.finished) {
       this.finishedFor += step;
-      // Hold on the result for a few seconds, then hand the player back.
-      if (this.finishedFor > 6) this.returnToMenu();
+      // The simulation keeps running underneath the classification so the AI
+      // cross the line and their live intervals resolve into real times.
+      if (this.finishedFor > RESULTS_HOLD && !this.leavingRace) this.dismissResults();
     }
   }
 
@@ -187,6 +203,12 @@ export class App {
         else if (action === 'back') this.audio.menuBack();
         else this.audio.menuMove();
         this.menu.handle(action);
+      } else if (this.race?.race.finished) {
+        // Any of confirm, back or pause takes the classification away.
+        if (action === 'confirm' || action === 'back' || action === 'pause') {
+          this.audio.menuConfirm();
+          this.dismissResults();
+        }
       } else if (action === 'pause' || action === 'back') {
         this.audio.menuBack();
         this.returnToMenu();
@@ -204,6 +226,9 @@ export class App {
       this.director?.update(frameTime);
       this.racePost.setDrive(player.telemetry.speedFraction, player.state.boost > 0, frameTime);
       this.racePost.render();
+
+      // Only leave once the table has actually finished animating away.
+      if (this.leavingRace && this.race.hud.resultsDismissed) this.returnToMenu();
     }
 
     this.renderer.reportFrame(frameTime);

@@ -194,7 +194,7 @@ export class MenuStage {
 
     this.craftName = t('', 34, 250, 0.24, 'left');
     this.craftNation = t('', 12, 500, 0.44, 'left');
-    this.craftBlurb = t('', 15, 300, 0.1, 'left');
+    this.craftBlurb = t('', 13, 300, 0.04, 'left');
     this.craftNation.setColour(ACCENT);
     this.craftBlurb.setColour(0xb6c1cb);
 
@@ -204,7 +204,7 @@ export class MenuStage {
     this.trackSubtitle.setColour(ACCENT);
     this.trackFacts.setColour(0xb6c1cb);
 
-    this.classBlurb = t('', 15, 300, 0.1, 'left');
+    this.classBlurb = t('', 13, 300, 0.04, 'left');
     this.classBlurb.setColour(0xb6c1cb);
 
     this.overlay.add(this.breadcrumb, this.hint);
@@ -361,7 +361,7 @@ export class MenuStage {
       return true;
     }
 
-    if (action === 'back') {
+    if (action === 'back' || action === 'pause') {
       const backTo: Record<MenuScreen, MenuScreen | null> = {
         title: null,
         main: 'title',
@@ -430,7 +430,8 @@ export class MenuStage {
       const track = TRACKS[list.index]!;
       this.trackTitle.setText(track.name);
       this.trackSubtitle.setText(`${track.subtitle} · ${track.region}`);
-      this.trackFacts.setText(`${track.corners.length} corners · ${track.laps} laps · sea level start`);
+      const laps = `${track.laps} lap${track.laps === 1 ? '' : 's'}`;
+      this.trackFacts.setText(`${track.corners.length} corners · ${laps} · sea level start`);
       this.layout();
     } else if (this.screen === 'class') {
       this.classBlurb.setText(SPEED_CLASSES[list.index]!.blurb);
@@ -495,8 +496,9 @@ export class MenuStage {
       void screen;
     }
 
-    // Track detail sits to the right of its list.
-    const detailX = left + 560;
+    // Track detail sits to the right of its list, and close enough to it that
+    // the longest constructor blurb still fits on a 16:9 screen.
+    const detailX = left + 520;
     this.trackTitle.position.set(detailX, listTop + 6, 0);
     this.trackSubtitle.position.set(detailX, listTop - 34, 0);
     this.trackFacts.position.set(detailX, listTop - 70, 0);

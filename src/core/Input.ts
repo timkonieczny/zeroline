@@ -49,7 +49,9 @@ export const KEY_BINDINGS = {
   fire: ['Space'],
   absorb: ['ShiftLeft', 'ShiftRight'],
   lookBack: ['KeyC'],
-  pause: ['Escape'],
+  // Escape is 'back' only. It used to sit in both lists, which meant a single
+  // press queued two actions and skipped a menu screen.
+  pause: [],
   confirm: ['Enter', 'Space', 'NumpadEnter'],
   back: ['Escape', 'Backspace'],
 } as const;
@@ -72,7 +74,14 @@ export class Input {
   activeDevice: 'keyboard' | 'gamepad' = 'keyboard';
 
   private readonly held = new Set<string>();
-  private readonly pressedThisFrame = new Set<string>();
+  /**
+   * Key presses since the last `update`, counted rather than flagged.
+   *
+   * A set would collapse two taps inside one frame into one action, which is
+   * invisible at 60 Hz and very visible when the frame rate drops — a menu that
+   * silently eats presses. Counting them costs nothing and cannot lose one.
+   */
+  private readonly pressesThisFrame = new Map<string, number>();
   private readonly menuQueue: MenuAction[] = [];
 
   /** Previous frame's gamepad button states, for edge detection. */
@@ -95,7 +104,7 @@ export class Input {
     // Let the browser keep its own shortcuts; swallow only what the game uses.
     if (this.isGameKey(e.code)) e.preventDefault();
     this.held.add(e.code);
-    this.pressedThisFrame.add(e.code);
+    this.pressesThisFrame.set(e.code, (this.pressesThisFrame.get(e.code) ?? 0) + 1);
     this.activeDevice = 'keyboard';
   };
 
@@ -106,7 +115,7 @@ export class Input {
   private readonly onBlur = (): void => {
     // Without this a key held while alt-tabbing stays held forever.
     this.held.clear();
-    this.pressedThisFrame.clear();
+    this.pressesThisFrame.clear();
   };
 
   private readonly onGamepadConnected = (e: GamepadEvent): void => {
@@ -145,9 +154,15 @@ export class Input {
     return false;
   }
 
+  /** How many times any of `codes` was pressed since the last update. */
+  private pressCount(codes: readonly string[]): number {
+    let total = 0;
+    for (const c of codes) total += this.pressesThisFrame.get(c) ?? 0;
+    return total;
+  }
+
   private anyPressed(codes: readonly string[]): boolean {
-    for (const c of codes) if (this.pressedThisFrame.has(c)) return true;
-    return false;
+    return this.pressCount(codes) > 0;
   }
 
   private pad(): Gamepad | null {
@@ -227,8 +242,8 @@ export class Input {
     // --- Double tap: sideshift on the ground, barrel roll in the air ---
     this.tapAge.left += dt;
     this.tapAge.right += dt;
-    const tappedLeft = this.pressedThisFrame.has('KeyQ') || padEdge(PAD.leftShoulder);
-    const tappedRight = this.pressedThisFrame.has('KeyE') || padEdge(PAD.rightShoulder);
+    const tappedLeft = this.pressesThisFrame.has('KeyQ') || padEdge(PAD.leftShoulder);
+    const tappedRight = this.pressesThisFrame.has('KeyE') || padEdge(PAD.rightShoulder);
 
     if (tappedLeft) {
       if (this.tapAge.left < DOUBLE_TAP_WINDOW) {
@@ -252,7 +267,7 @@ export class Input {
     this.pumpMenuActions(dt, pad, padEdge);
 
     for (let i = 0; i < this.padPrev.length; i++) this.padPrev[i] = padPressed(i);
-    this.pressedThisFrame.clear();
+    this.pressesThisFrame.clear();
   }
 
   /** Queues menu actions, with hold-to-repeat on the four directions. */
@@ -285,9 +300,14 @@ export class Input {
       }
     }
 
-    if (this.anyPressed(KEY_BINDINGS.confirm) || padEdge(PAD.south)) this.menuQueue.push('confirm');
-    if (this.anyPressed(KEY_BINDINGS.back) || padEdge(PAD.east)) this.menuQueue.push('back');
-    if (this.anyPressed(KEY_BINDINGS.pause) || padEdge(PAD.start)) this.menuQueue.push('pause');
+    // One queued action per press, so nothing is dropped when several land in
+    // the same frame.
+    const enqueue = (action: MenuAction, count: number): void => {
+      for (let i = 0; i < count; i++) this.menuQueue.push(action);
+    };
+    enqueue('confirm', this.pressCount(KEY_BINDINGS.confirm) + (padEdge(PAD.south) ? 1 : 0));
+    enqueue('back', this.pressCount(KEY_BINDINGS.back) + (padEdge(PAD.east) ? 1 : 0));
+    enqueue('pause', this.pressCount(KEY_BINDINGS.pause) + (padEdge(PAD.start) ? 1 : 0));
   }
 
   /** Takes the next queued menu action, or null. */

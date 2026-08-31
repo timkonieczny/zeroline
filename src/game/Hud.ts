@@ -1,9 +1,10 @@
 import { Color, Group, Mesh, OrthographicCamera, PlaneGeometry, Scene } from 'three';
 import { MeshBasicNodeMaterial } from 'three/webgpu';
-import { float, mix, smoothstep, uniform, uv, vec3 } from 'three/tsl';
+import { float, smoothstep, uniform, uv, vec3 } from 'three/tsl';
 import { TextMesh, panelMaterial } from '@/ui/Text';
 import type { Race } from './Race';
 import { WEAPONS } from './weapons/Weapons';
+import { ResultsTable } from './Results';
 import { clamp01, lerp } from '@/core/math';
 
 /** Layout margin from the screen edge, in pixels. */
@@ -11,6 +12,9 @@ const MARGIN = 46;
 /** Width and height of the shield bar, in pixels. */
 const BAR_WIDTH = 300;
 const BAR_HEIGHT = 9;
+
+/** Peak darkening of the scrims, against the screen edge. */
+const SCRIM_STRENGTH = 0.6;
 
 const INK = 0xf2f6fa;
 const DIM = 0x8b97a3;
@@ -41,6 +45,9 @@ export class Hud {
   readonly camera = new OrthographicCamera(0, 1, 1, 0, -100, 100);
 
   private readonly root = new Group();
+  private readonly results: ResultsTable;
+  /** Fades the racing readouts down while the classification is up. */
+  private raceChrome = 1;
 
   private readonly speedValue: TextMesh;
   private readonly speedUnit: TextMesh;
@@ -73,6 +80,8 @@ export class Hud {
 
   constructor(pixelRatio: number) {
     this.scene.add(this.root);
+    this.results = new ResultsTable(pixelRatio);
+    this.scene.add(this.results.group);
 
     this.speedValue = new TextMesh('0', { size: 78, weight: 200, tracking: 0.02, align: 'right' }, pixelRatio);
     this.speedUnit = new TextMesh('km/h', { size: 15, weight: 500, tracking: 0.42, align: 'right' }, pixelRatio);
@@ -225,39 +234,82 @@ export class Hud {
     const targetSlide = held ? 1 : 0;
     this.weaponSlide = lerp(this.weaponSlide, targetSlide, 1 - Math.exp(-dt * 11));
     this.weaponPanel.position.y = MARGIN + 34 - (1 - this.weaponSlide) * 46;
-    this.weaponName.setOpacity(this.weaponSlide);
-    this.weaponHint.setOpacity(this.weaponSlide * 0.85);
     if (held) {
       const def = WEAPONS[held.id];
       this.weaponName.setText(def.ammo > 1 ? `${def.name} x${held.ammo}` : def.name);
       this.weaponName.setColour(def.kind === 'offensive' ? 0xff8a5c : def.kind === 'defensive' ? 0x6ce8ff : 0xffd76b);
     }
 
-    // Centre message: countdown, then the flag.
+    // The classification takes over once the flag is out.
+    if (race.finished) this.results.show();
+    this.results.update(race, dt, this.width, this.height);
+
+    // Racing readouts fade out under the classification. The bars and scrims
+    // are plain meshes with no text opacity, so the whole group is hidden once
+    // the fade has run rather than being left at a residual alpha.
+    this.raceChrome = lerp(this.raceChrome, this.results.shown ? 0 : 1, 1 - Math.exp(-dt * 7));
+    this.root.visible = this.raceChrome > 0.02;
+    for (const mesh of [
+      this.speedValue,
+      this.speedUnit,
+      this.positionValue,
+      this.positionOf,
+      this.lapLabel,
+      this.lapValue,
+      this.timeValue,
+      this.bestLabel,
+    ]) {
+      mesh.setOpacity(this.raceChrome);
+    }
+    this.weaponName.setOpacity(this.weaponSlide * this.raceChrome);
+    this.weaponHint.setOpacity(this.weaponSlide * 0.85 * this.raceChrome);
+
+    // Centre message: the countdown, and the lights going out.
     let message = '';
     if (race.phase === 'countdown') {
       const remaining = Math.ceil(race.countdown);
       message = remaining > 0 ? String(remaining) : 'GO';
-    } else if (race.finished) {
-      message = `P${player.position}`;
     } else if (race.time < 1.2) {
       message = 'GO';
     }
     const targetOpacity = message ? 1 : 0;
     this.centreOpacity = lerp(this.centreOpacity, targetOpacity, 1 - Math.exp(-dt * 8));
     if (message) this.centreMessage.setText(message);
-    this.centreMessage.setOpacity(this.centreOpacity);
-    this.centreMessage.setColour(race.finished ? 0xffd76b : critical ? WARN : INK, 1);
+    this.centreMessage.setColour(critical ? WARN : INK, 1);
+    this.centreMessage.setOpacity(this.centreOpacity * this.raceChrome);
     const pop = 1 + (1 - this.centreOpacity) * 0.25;
     this.centreMessage.scale.setScalar(pop);
   }
 
-  /** A one-sided vertical fade to black, used behind the readouts. */
-  private static scrimMaterial(fadeUp: boolean): MeshBasicNodeMaterial {
+  /** Starts the classification's dismissal animation. */
+  hideResults(): void {
+    this.results.hide();
+  }
+
+  /** True once the classification has finished animating away. */
+  get resultsDismissed(): boolean {
+    return this.results.dismissed;
+  }
+
+  /** Clears the classification for a fresh race. */
+  resetResults(): void {
+    this.results.reset();
+    this.raceChrome = 1;
+  }
+
+  /**
+   * A one-sided vertical fade, used behind the readouts.
+   *
+   * `edgeDistance` is 0 against the edge of the screen this scrim hugs and 1 at
+   * its inner side, so the darkening is strongest at the edge and gone by the
+   * inner boundary. Getting this the wrong way round — as an earlier version
+   * did — draws a hard-edged band across the middle of the frame instead.
+   */
+  private static scrimMaterial(fromBottom: boolean): MeshBasicNodeMaterial {
     const material = new MeshBasicNodeMaterial();
-    const t = fadeUp ? uv().y : uv().y.oneMinus();
+    const edgeDistance = fromBottom ? uv().y : uv().y.oneMinus();
     material.colorNode = vec3(0.02, 0.03, 0.04);
-    material.opacityNode = mix(float(0.55), float(0), smoothstep(float(0), float(1), t.oneMinus()));
+    material.opacityNode = smoothstep(float(0), float(1), edgeDistance).oneMinus().mul(SCRIM_STRENGTH);
     material.transparent = true;
     material.depthTest = false;
     material.depthWrite = false;
@@ -265,6 +317,7 @@ export class Hud {
   }
 
   dispose(): void {
+    this.results.dispose();
     this.scene.traverse((object) => {
       if (object instanceof TextMesh) object.dispose();
       else if (object instanceof Mesh) {
