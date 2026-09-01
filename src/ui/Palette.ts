@@ -46,11 +46,18 @@ export const LIGHT_UI: UiPalette = {
   // One dark grey for everything at rest, and the blue purely for what is
   // selected. Three tones on a white set meant a third of the interface was
   // always the least legible thing on screen for no reason anyone could see.
-  ink: 0x243039,
-  dim: 0x243039,
-  muted: 0x9aa6b1,
-  accent: 0x0072a8,
-  highlight: 0x0072a8,
-  highlightAlpha: 0.14,
-  rule: 0xbac4cc,
+  //
+  // Nearly black, not grey. The showroom is white walls, a white floor, white
+  // craft and a bank of overhead lights, and anything short of this washes out
+  // against it — the first two passes both read as "grey on white" long before
+  // they read as text.
+  ink: 0x0b1219,
+  dim: 0x0b1219,
+  muted: 0x55616b,
+  accent: 0x005e8f,
+  highlight: 0x005e8f,
+  // The selected row's backdrop. Faint enough at 0.14 that the highlight only
+  // registered once you already knew where to look.
+  highlightAlpha: 0.3,
+  rule: 0xa9b4bd,
 };

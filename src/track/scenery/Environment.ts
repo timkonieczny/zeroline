@@ -14,8 +14,20 @@ import {
 } from 'three';
 import { WaterMesh } from 'three/addons/objects/WaterMesh.js';
 import { createWaterNormals } from './WaterNormals';
-import { MeshStandardNodeMaterial, PMREMGenerator, type WebGPURenderer } from 'three/webgpu';
-import { color, float, mix, normalize, positionLocal, pow, smoothstep, vec3 } from 'three/tsl';
+import { MeshBasicNodeMaterial, MeshStandardNodeMaterial, PMREMGenerator, type WebGPURenderer } from 'three/webgpu';
+import {
+  atan,
+  color,
+  float,
+  mix,
+  normalize,
+  positionLocal,
+  pow,
+  smoothstep,
+  texture,
+  vec2,
+  vec3,
+} from 'three/tsl';
 import type { TrackDefinition } from '../TrackTypes';
 import type { Track } from '../Track';
 import { skyTexture } from './SkyTexture';
@@ -87,13 +99,23 @@ export class Environment {
     const fill = new Color(sky.zenith).lerp(new Color(0xffffff), 0.55);
     this.ambient = new HemisphereLight(fill, new Color(sky.ground), 1.0);
 
-    this.sky = new Mesh(new SphereGeometry(SKY_RADIUS, 32, 20), Environment.skyMaterial(track.definition));
+    // Always a mesh, painted or procedural.
+    //
+    // `scene.background` was cheaper and looked identical standing still, but a
+    // background is drawn by its own pass and never writes to the velocity
+    // buffer. Motion blur then smeared the sky along whatever geometry happened
+    // to leave velocity in those pixels the frame before, which is why it
+    // flickered and folded into itself through fast corners. A dome is ordinary
+    // geometry: it writes velocity like everything else, and because it is
+    // pinned to the camera that velocity is pure rotation, which is exactly what
+    // a sky should contribute to the blur.
+    const panorama = skyTexture();
+    this.sky = new Mesh(
+      new SphereGeometry(SKY_RADIUS, 48, 32),
+      panorama ? Environment.panoramaMaterial(panorama) : Environment.skyMaterial(track.definition),
+    );
     this.sky.name = 'sky';
     this.sky.frustumCulled = false;
-    // The dome is the fallback. When the painted panorama is available it goes
-    // straight into `scene.background`, which is both cheaper and sharper than
-    // texturing a sphere, and the dome stops being drawn.
-    this.sky.visible = skyTexture() === null;
 
     // Three's own ocean shader, fed a normal map generated at load rather
     // than a downloaded JPEG. It renders its own planar reflection, so the
@@ -138,19 +160,17 @@ export class Environment {
     scene.fog = new FogExp2(new Color(sky.horizon), sky.fogDensity);
     scene.add(this.group);
 
+    // Nothing is assigned to `scene.background`: the dome is the background, and
+    // it is the only version of it that motion blur can see.
+    scene.background = null;
+
     if (panorama) {
-      scene.background = panorama;
-      // The panorama is 8-bit sRGB and the scene pass is linear HDR, so it
-      // arrives dimmer than the sunlit geometry in front of it. Lifting it here
-      // is a display decision, not a lighting one.
-      scene.backgroundIntensity = 1.15;
       this.environmentMap = pmrem.fromEquirectangular(panorama).texture;
       // A little stronger than the gradient probe was. That one was turned down
       // because a smooth blue wash on every white surface reads as a colour
       // cast; this one has structure, so it reads as a reflection.
       scene.environmentIntensity = 0.62;
     } else {
-      scene.background = new Color(sky.horizon);
       const probeScene = new Scene();
       const probeSky = new Mesh(this.sky.geometry, this.sky.material);
       probeScene.add(probeSky);
@@ -170,12 +190,41 @@ export class Environment {
    * lighting — only which slice of the world lands in the shadow map.
    */
   update(focus: Vector3): void {
-    this.sky.position.set(focus.x, 0, focus.z);
+    // The dome follows the camera in all three axes. Leaving it on the ground
+    // plane gave it parallax as the circuit climbed, and parallax on a sky is
+    // both wrong and a source of translation in the velocity buffer.
+    this.sky.position.copy(focus);
     this.sea.position.set(focus.x, SEA_LEVEL, focus.z);
     _target.copy(focus);
     this.sun.target.position.copy(_target);
     this.sun.position.copy(_target).addScaledVector(_sunDirection, 600);
     this.sun.target.updateMatrixWorld();
+  }
+
+  /**
+   * The painted sky, mapped onto the dome.
+   *
+   * Sampled by direction rather than by the sphere's own UVs, so the seam and
+   * the pole pinching of the geometry cost nothing — the lookup is the same
+   * equirectangular one the lighting probe uses, and the two therefore agree.
+   */
+  private static panoramaMaterial(panorama: Texture): MeshBasicNodeMaterial {
+    const material = new MeshBasicNodeMaterial();
+    const direction = normalize(positionLocal);
+    // TSL's two-argument atan, which is atan2 under a shorter name.
+    const u = atan(direction.z, direction.x).mul(1 / (Math.PI * 2)).add(0.5);
+    // No flip on v: three uploads images with `flipY`, so v = 1 is the top of
+    // the picture. Inverting it here put the panorama's plain lower half
+    // overhead and hid every cloud in it.
+    const v = direction.y.clamp(-1, 1).asin().mul(1 / Math.PI).add(0.5);
+
+    // 8-bit sRGB against a linear HDR scene, so it arrives dimmer than the
+    // sunlit geometry in front of it. Lifting it is a display decision.
+    material.colorNode = texture(panorama, vec2(u, v)).rgb.mul(1.15);
+    material.side = BackSide;
+    material.fog = false;
+    material.depthWrite = false;
+    return material;
   }
 
   /** Direction the sun shines from, as a unit vector. */

@@ -59,7 +59,7 @@ const HUD_GUARD = 6;
  * frame put the lap counter within a few percent of the type's own value and it
  * simply disappeared.
  */
-const SCRIM_STRENGTH = 0.7;
+const SCRIM_STRENGTH = 0.72;
 /**
  * Seconds the finishing position is held on its own before the classification
  * arrives. The table is the detail; the placard is the answer.
@@ -73,7 +73,10 @@ const _turn = new Vector3();
 const _right = new Vector3();
 
 const INK = 0xf2f6fa;
-const DIM = 0x8b97a3;
+// Light, not mid. These labels sit over a painted sky that is pale most of
+// the way round the circuit, and a mid grey on pale cloud is not a colour
+// choice, it is a disappearing act.
+const DIM = 0xccd5dc;
 const WARN = 0xff3d5e;
 
 /** "1ST", "2ND", "3RD"... for the finishing placard. */
@@ -534,9 +537,10 @@ export class Hud {
     const material = new MeshBasicNodeMaterial();
     const edgeDistance = fromBottom ? uv().y : uv().y.oneMinus();
     material.colorNode = vec3(0.02, 0.03, 0.04);
-    // Biased toward the edge, so the darkening is concentrated where the type
-    // is rather than smeared halfway down the frame.
-    material.opacityNode = pow(smoothstep(float(0), float(1), edgeDistance).oneMinus(), 1.6).mul(SCRIM_STRENGTH);
+    // Held rather than biased. The readouts sit a third of the way into the
+    // scrim, not against the edge of it, so a curve that falls away quickly is
+    // at its weakest exactly where the type needs it.
+    material.opacityNode = pow(smoothstep(float(0), float(1), edgeDistance).oneMinus(), 0.6).mul(SCRIM_STRENGTH);
     material.transparent = true;
     material.depthTest = false;
     material.depthWrite = false;

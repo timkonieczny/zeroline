@@ -1,5 +1,6 @@
 import { Group, InstancedMesh, OctahedronGeometry, Vector3 } from 'three';
 import { MeshStandardNodeMaterial } from 'three/webgpu';
+import { mrt, output, vec4 } from 'three/tsl';
 import { color, cos, float, fract, instanceIndex, mix, positionLocal, sin, smoothstep, uniform, vec3 } from 'three/tsl';
 import type { Track } from '../Track';
 
@@ -172,6 +173,20 @@ export class SkyHighway {
     const worldY = altitude.add(positionLocal.y);
 
     material.positionNode = vec3(worldX, worldY, worldZ);
+
+    // Zero velocity, deliberately.
+    //
+    // Three computes the velocity buffer from `positionLocal` and the object's
+    // previous world matrix. This material throws `positionLocal` away and
+    // derives each craft's position from its index and the clock, so the
+    // velocity three computes is for a stationary octahedron at the group's
+    // origin — a vector with nothing to do with where the craft is drawn.
+    // Motion blur followed it and the traffic smeared across the sky.
+    //
+    // The honest fix would be to evaluate the same formula one frame back, which
+    // needs the matrices the velocity node keeps to itself. These are specks at
+    // two kilometres: no blur is a far better answer than the wrong blur.
+    material.mrtNode = mrt({ output, velocity: vec4(0, 0, 0, 0) });
 
     // Dark body, hot tail. The tail is what actually reads at this distance.
     const tail = smoothstep(float(-1), float(-3.4), positionLocal.z);
