@@ -15,6 +15,18 @@ const MARGIN = 46;
 const BAR_WIDTH = 300;
 const BAR_HEIGHT = 9;
 
+/**
+ * How much larger the HUD gets at full speed.
+ *
+ * Each cluster is anchored to its own corner and scaled about that anchor, so
+ * the readouts grow inward and the margin never moves. That is the only reason
+ * this is safe: scaling the overlay about the screen centre would run the
+ * corners off the edge at anything past about 1.08.
+ */
+const HUD_SPEED_GROWTH = 0.38;
+/** How fast the growth follows the speedometer. Slower than the number itself. */
+const HUD_SCALE_RATE = 5;
+
 /** Peak darkening of the scrims, against the screen edge. */
 const SCRIM_STRENGTH = 0.6;
 /**
@@ -77,6 +89,13 @@ export class Hud {
   /** Drives the shield bar's colour without rebuilding its material. */
   private readonly shieldColour = uniform(new Color(0x24d4ff));
   private readonly weaponPanel: Group;
+  /** One group per screen corner, each scaled about its own anchor. */
+  private readonly cornerTL = new Group();
+  private readonly cornerTR = new Group();
+  private readonly cornerBL = new Group();
+  private readonly cornerBR = new Group();
+  /** Eased HUD scale, driven by the player's fraction of top speed. */
+  private hudScale = 1;
   private readonly scrimTop: Mesh;
   private readonly scrimBottom: Mesh;
 
@@ -101,7 +120,7 @@ export class Hud {
     this.scene.add(this.results.group);
 
     this.minimap = new Minimap(track, fieldSize);
-    this.root.add(this.minimap.group);
+    this.cornerTR.add(this.minimap.group);
 
     this.speedValue = new TextMesh('0', { size: 80, tracking: 0.02, align: 'right', italic: true }, pixelRatio);
     this.speedUnit = new TextMesh('km/h', { size: 15, tracking: 0.42, align: 'right' }, pixelRatio);
@@ -141,19 +160,18 @@ export class Hud {
     this.weaponPanel = new Group();
     this.weaponPanel.add(this.weaponName, this.weaponHint);
 
+    this.cornerTL.add(this.lapLabel, this.lapValue);
+    this.cornerTR.add(this.timeValue, this.bestLabel);
+    this.cornerBL.add(this.positionValue, this.positionOf, this.shieldTrack, this.shieldFill);
+    this.cornerBR.add(this.speedValue, this.speedUnit);
+
     this.root.add(
       this.scrimTop,
       this.scrimBottom,
-      this.speedValue,
-      this.speedUnit,
-      this.positionValue,
-      this.positionOf,
-      this.lapLabel,
-      this.lapValue,
-      this.timeValue,
-      this.bestLabel,
-      this.shieldTrack,
-      this.shieldFill,
+      this.cornerTL,
+      this.cornerTR,
+      this.cornerBL,
+      this.cornerBR,
       this.weaponPanel,
     );
 
@@ -193,15 +211,21 @@ export class Hud {
     this.layout();
   }
 
+  /**
+   * Places the four corner anchors, then every readout relative to its anchor.
+   *
+   * Nothing here is positioned in absolute screen coordinates any more. Corner
+   * groups get scaled every frame, and a child at an absolute position would be
+   * dragged across the screen by its own group's scale rather than growing in
+   * place.
+   */
   private layout(): void {
     const { width, height } = this;
 
-    // Top right, below the clock and the best-lap line.
-    this.minimap.group.position.set(
-      width - MARGIN - this.minimap.extent.x / 2,
-      height - MARGIN - 74 - this.minimap.extent.y / 2,
-      0,
-    );
+    this.cornerTL.position.set(MARGIN, height - MARGIN, 0);
+    this.cornerTR.position.set(width - MARGIN, height - MARGIN, 0);
+    this.cornerBL.position.set(MARGIN, MARGIN, 0);
+    this.cornerBR.position.set(width - MARGIN, MARGIN, 0);
 
     const scrimHeight = Math.min(230, height * 0.3);
     this.scrimTop.scale.set(width, scrimHeight, 1);
@@ -210,22 +234,27 @@ export class Hud {
     this.scrimBottom.position.set(width / 2, scrimHeight / 2, 0);
 
     // Bottom right: the speed readout, the single most-watched number.
-    this.speedValue.position.set(width - MARGIN, MARGIN + 62, 0);
-    this.speedUnit.position.set(width - MARGIN, MARGIN + 18, 0);
+    this.speedValue.position.set(0, 62, 0);
+    this.speedUnit.position.set(0, 18, 0);
 
     // Bottom left: position, then the shield bar under it.
-    this.positionValue.position.set(MARGIN, MARGIN + 74, 0);
-    this.positionOf.position.set(MARGIN + this.positionValue.size.x - 8, MARGIN + 52, 0);
-    this.shieldTrack.position.set(MARGIN + BAR_WIDTH / 2, MARGIN + 18, 0);
-    this.shieldFill.position.set(MARGIN, MARGIN + 18, 0);
+    this.positionValue.position.set(0, 74, 0);
+    this.positionOf.position.set(this.positionValue.size.x - 8, 52, 0);
+    this.shieldTrack.position.set(BAR_WIDTH / 2, 18, 0);
+    this.shieldFill.position.set(0, 18, 0);
 
     // Top left: lap counter.
-    this.lapLabel.position.set(MARGIN, height - MARGIN - 6, 0);
-    this.lapValue.position.set(MARGIN, height - MARGIN - 34, 0);
+    this.lapLabel.position.set(0, -6, 0);
+    this.lapValue.position.set(0, -34, 0);
 
-    // Top right: race clock and best lap.
-    this.timeValue.position.set(width - MARGIN, height - MARGIN - 12, 0);
-    this.bestLabel.position.set(width - MARGIN, height - MARGIN - 42, 0);
+    // Top right: race clock, best lap, and the minimap under both.
+    this.timeValue.position.set(0, -12, 0);
+    this.bestLabel.position.set(0, -42, 0);
+    this.minimap.group.position.set(
+      -this.minimap.extent.x / 2,
+      -74 - this.minimap.extent.y / 2,
+      0,
+    );
 
     this.weaponPanel.position.set(width / 2, MARGIN + 34, 0);
     this.weaponName.position.set(0, 22, 0);
@@ -242,10 +271,21 @@ export class Hud {
     this.shownSpeed = lerp(this.shownSpeed, targetSpeed, 1 - Math.exp(-dt * 12));
     this.speedValue.setText(this.shownSpeed.toFixed(0));
 
+    // The HUD swells with speed. Measured against the craft's own rated top
+    // speed, so a pad or a turbo pushes the fraction to its ceiling and holds
+    // the readouts at full size for as long as the boost lasts.
+    const pace = clamp01(player.telemetry.speed / player.handling.topSpeed);
+    const targetScale = 1 + pace * HUD_SPEED_GROWTH;
+    this.hudScale = lerp(this.hudScale, targetScale, 1 - Math.exp(-dt * HUD_SCALE_RATE));
+    for (const corner of [this.cornerTL, this.cornerTR, this.cornerBL, this.cornerBR]) {
+      corner.scale.setScalar(this.hudScale);
+    }
+    this.weaponPanel.scale.setScalar(this.hudScale);
+
     this.shownShield = lerp(this.shownShield, clamp01(player.shieldFraction), 1 - Math.exp(-dt * 9));
     const fillWidth = Math.max(1, BAR_WIDTH * this.shownShield);
     this.shieldFill.scale.x = fillWidth;
-    this.shieldFill.position.x = MARGIN + fillWidth / 2;
+    this.shieldFill.position.x = fillWidth / 2;
     // Below a quarter the bar turns red and pulses, because at that point the
     // next clean hit ends the race.
     const critical = this.shownShield < 0.28;
@@ -265,7 +305,7 @@ export class Hud {
     const held = player.weapon;
     const targetSlide = held ? 1 : 0;
     this.weaponSlide = lerp(this.weaponSlide, targetSlide, 1 - Math.exp(-dt * 11));
-    this.weaponPanel.position.y = MARGIN + 34 - (1 - this.weaponSlide) * 46;
+    this.weaponPanel.position.y = MARGIN + (34 - (1 - this.weaponSlide) * 46) * this.hudScale;
     if (held) {
       const def = WEAPONS[held.id];
       this.weaponName.setText(def.ammo > 1 ? `${def.name} x${held.ammo}` : def.name);

@@ -5,6 +5,7 @@ import {
   attribute,
   clamp,
   color,
+  cos,
   float,
   fract,
   max,
@@ -315,16 +316,32 @@ export class TrackMesh {
     return material;
   }
 
-  /** Weapon pad: a slow breathing glow, so it reads as available rather than urgent. */
+  /**
+   * Weapon pad: a colour wheel turning under a lit frame.
+   *
+   * The first version lit only a thin border and left the middle near black,
+   * which at racing speed read as a hole in the road rather than as something
+   * worth driving over. The interior now cycles through the whole hue circle —
+   * a weapon pad is a random draw, and the surface says so before you take it.
+   */
   private static pickupPadMaterial(): MeshStandardNodeMaterial {
     const material = new MeshStandardNodeMaterial();
     const across = uv().x.sub(0.5).abs().mul(2);
     const along = uv().y.sub(0.5).abs().mul(2);
     const frame = max(across, along);
     const ring = smoothstep(float(0.55), float(0.75), frame).mul(smoothstep(float(1.0), float(0.9), frame));
+    const inner = smoothstep(float(0.62), float(0.42), frame);
     const pulse = sin(time.mul(2.4)).mul(0.5).add(0.5).mul(0.4).add(0.6);
-    material.colorNode = mix(color(0x11181d), color(0xdfe8ee), ring);
-    material.emissiveNode = color(0xa8d8ff).mul(ring).mul(pulse).mul(2.6);
+
+    // Cosine palette: three channels of the same wave, a third of a turn apart,
+    // which is a full hue sweep in four cheap instructions and no texture.
+    const phase = time.mul(0.28).sub(uv().y.mul(0.4));
+    const wheel = vec3(0.5, 0.5, 0.5).add(
+      vec3(0.5, 0.5, 0.5).mul(cos(vec3(phase, phase.add(0.33), phase.add(0.67)).mul(Math.PI * 2))),
+    );
+
+    material.colorNode = mix(wheel.mul(0.55).mul(inner), color(0xdfe8ee), ring);
+    material.emissiveNode = wheel.mul(inner).mul(pulse).mul(2.4).add(color(0xdfe8ee).mul(ring).mul(pulse).mul(2.2));
     material.roughnessNode = float(0.35);
     return material;
   }

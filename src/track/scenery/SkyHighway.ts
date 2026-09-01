@@ -152,8 +152,15 @@ export class SkyHighway {
     const perpX = dirZ.negate();
     const perpZ = dirX;
 
-    // Even spacing along the lane, scrolling with the clock and wrapping.
-    const progress = fract(slot.div(float(PER_LANE)).add(this.clock.mul(speed).div(LANE_LENGTH)));
+    // Spacing along the lane, scrolling with the clock and wrapping. The slots
+    // are evenly divided and then jittered by a per-craft hash: perfectly even
+    // spacing is the one thing that reads instantly as a shader rather than as
+    // traffic. The jitter stays under half a slot, so nothing overtakes.
+    const jitter = fract(sin(slot.mul(12.9898).add(lane.mul(78.233))).mul(43758.5453))
+      .sub(0.5)
+      .mul(0.8)
+      .div(float(PER_LANE));
+    const progress = fract(slot.div(float(PER_LANE)).add(jitter).add(this.clock.mul(speed).div(LANE_LENGTH)));
     const along = progress.sub(0.5).mul(LANE_LENGTH);
 
     // Rotate the hull to face down its lane.

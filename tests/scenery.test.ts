@@ -121,4 +121,37 @@ describe('skyline placement', () => {
     expect(decks).toBeInstanceOf(InstancedMesh);
     expect((decks as InstancedMesh).count).toBeGreaterThan(8);
   });
+
+  it('never lays a platform across the road', () => {
+    // A platform is wider than the buildings standing on it, so a cluster that
+    // cleared the circuit could still have its deck run over the racing line.
+    const decks = skyline.group.children.find((child) => child.name === 'skyline-decks') as InstancedMesh;
+    const matrix = new Matrix4();
+    const position = new Vector3();
+    const scale = new Vector3();
+    const spin = new Quaternion();
+    const offenders: string[] = [];
+
+    for (let i = 0; i < decks.count; i++) {
+      decks.getMatrixAt(i, matrix);
+      position.setFromMatrixPosition(matrix);
+      matrix.decompose(new Vector3(), spin, scale);
+      // Bridges are long and thin and sit high; platforms are wide slabs at the
+      // waterline. Only the slabs are tested here.
+      if (position.y > -10) continue;
+
+      for (let s = 0; s < track.length; s += 6) {
+        const frame = track.frameAt(s);
+        if (Math.abs(frame.position.y - (position.y + scale.y / 2)) > 12) continue;
+        const dx = Math.max(0, Math.abs(frame.position.x - position.x) - scale.x / 2);
+        const dz = Math.max(0, Math.abs(frame.position.z - position.z) - scale.z / 2);
+        if (Math.hypot(dx, dz) < frame.width * 0.5) {
+          offenders.push(`deck ${i} crosses the road at s=${s.toFixed(0)}`);
+          break;
+        }
+      }
+    }
+
+    expect(offenders).toEqual([]);
+  });
 });

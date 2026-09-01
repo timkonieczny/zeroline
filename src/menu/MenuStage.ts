@@ -36,6 +36,7 @@ import {
 } from 'three/tsl';
 import { createFloorSurface } from './FloorSurface';
 import { GarageProps } from './GarageProps';
+import { buildWordmark3D } from './Wordmark3D';
 import { LIGHT_UI } from '@/ui/Palette';
 import { TextMesh, panelMaterial } from '@/ui/Text';
 import { ListMenu, StatBar } from '@/ui/Widgets';
@@ -63,10 +64,21 @@ const UI = LIGHT_UI;
 
 /** The garage's walls and haze. */
 const ROOM_WHITE = 0xeef3f7;
-/** Interior size of the bay, in metres. */
-const ROOM_WIDTH = 46;
-const ROOM_DEPTH = 60;
-const ROOM_HEIGHT = 13.5;
+/**
+ * Interior size of the bay, in metres.
+ *
+ * Wider and deeper than the plinth needs, and pushed left of it: the type is
+ * set flush left, and the camera looks that way. At the first size the frame
+ * ran off the end of the left-hand wall and the room stopped being a room.
+ */
+const ROOM_WIDTH = 84;
+const ROOM_DEPTH = 74;
+const ROOM_HEIGHT = 15;
+/** Centre of the room's plan, offset from the plinth. */
+const ROOM_X = 9 - 14;
+const ROOM_Z = -ROOM_DEPTH / 2 + 12;
+/** Where the back wall stands, and what the logo is mounted on. */
+const BACK_WALL_Z = ROOM_Z - ROOM_DEPTH / 2;
 /** Padding between a ceiling strip's ends and the walls. */
 const STRIP_PADDING = 5;
 /** Ceiling strips, laid diagonally across the bay. */
@@ -819,9 +831,9 @@ export class MenuStage {
       if (length <= 1) continue;
       const panel = new Mesh(new PlaneGeometry(STRIP_WIDTH, length), material);
       panel.position.set(
-        PLINTH.x + Math.cos(angle) * offset,
+        ROOM_X + Math.cos(angle) * offset,
         ROOM_HEIGHT - 0.35,
-        -ROOM_DEPTH / 2 + 8 - Math.sin(angle) * offset,
+        ROOM_Z - Math.sin(angle) * offset,
       );
       panel.rotation.set(Math.PI / 2, 0, -angle);
       group.add(panel);
@@ -845,21 +857,40 @@ export class MenuStage {
 
     const ceiling = new Mesh(new PlaneGeometry(ROOM_WIDTH, ROOM_DEPTH), wall);
     ceiling.rotation.x = Math.PI / 2;
-    ceiling.position.set(PLINTH.x, ROOM_HEIGHT, -ROOM_DEPTH / 2 + 8);
+    ceiling.position.set(ROOM_X, ROOM_HEIGHT, ROOM_Z);
     group.add(ceiling);
 
     const back = new Mesh(new PlaneGeometry(ROOM_WIDTH, ROOM_HEIGHT), wall);
-    back.position.set(PLINTH.x, ROOM_HEIGHT / 2, -ROOM_DEPTH + 8);
+    back.position.set(ROOM_X, ROOM_HEIGHT / 2, BACK_WALL_Z);
     group.add(back);
 
     for (const side of [-1, 1] as const) {
       const panel = new Mesh(new PlaneGeometry(ROOM_DEPTH, ROOM_HEIGHT), wall);
       panel.rotation.y = -side * Math.PI / 2;
-      panel.position.set(PLINTH.x + side * ROOM_WIDTH / 2, ROOM_HEIGHT / 2, -ROOM_DEPTH / 2 + 8);
+      panel.position.set(ROOM_X + side * ROOM_WIDTH / 2, ROOM_HEIGHT / 2, ROOM_Z);
       group.add(panel);
     }
 
+    group.add(MenuStage.buildWallLogo());
     return group;
+  }
+
+  /** ZEROLINE across the back wall, in relief. Blue for ZERO, ink for LINE. */
+  private static buildWallLogo(): Group {
+    const logo = buildWordmark3D({
+      text: 'ZEROLINE',
+      height: 4.5,
+      depth: 0.7,
+      split: 4,
+      first: UI.accent,
+      second: UI.ink,
+    });
+    // Sat on the wall's face, baseline above head height so the props along the
+    // back of the bay never cut into it, and left of the room's centre: every
+    // camera station looks left of the plinth, and centred on the wall the
+    // wordmark ran off the right of frame.
+    logo.position.set(ROOM_X - 17, 6.4, BACK_WALL_Z + 0.35);
+    return logo;
   }
 
   /**

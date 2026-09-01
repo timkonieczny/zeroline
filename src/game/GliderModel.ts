@@ -1,8 +1,29 @@
-import { BufferAttribute, BufferGeometry, Color, DoubleSide, Group, Mesh, type Object3D } from 'three';
-import { MeshPhysicalNodeMaterial, MeshStandardNodeMaterial } from 'three/webgpu';
-import { color, float, mix, oneMinus, smoothstep, uniform, uv, vec3 } from 'three/tsl';
+import { AdditiveBlending, BufferAttribute, BufferGeometry, Color, DoubleSide, Group, Mesh, type Object3D } from 'three';
+import { MeshBasicNodeMaterial, MeshPhysicalNodeMaterial, MeshStandardNodeMaterial } from 'three/webgpu';
+import {
+  color,
+  float,
+  mix,
+  mx_fractal_noise_float,
+  oneMinus,
+  positionLocal,
+  sin,
+  smoothstep,
+  time,
+  uniform,
+  uv,
+  vec3,
+} from 'three/tsl';
 import type { HullSpec, Team } from '@/data/teams';
 import { clamp01, lerp } from '@/core/math';
+
+/**
+ * Length the plume geometry is built at, in metres.
+ *
+ * The shader stretches it from here; it is a reference, not the flame anyone
+ * actually sees.
+ */
+const FLAME_REFERENCE = 2.6;
 
 /** Cross-section of the hull, as fractions of half-beam and half-height. */
 const SECTION: readonly (readonly [number, number])[] = [
@@ -191,21 +212,33 @@ export function buildFins(hull: HullSpec): BufferGeometry {
   return toGeometry(sweep);
 }
 
-/** The canopy: a low bubble over the middle of the hull. */
-function buildCanopy(hull: HullSpec): BufferGeometry {
+/**
+ * The canopy: a raked screen over the middle of the hull.
+ *
+ * Half the height it used to be, and its peak sits three-quarters of the way
+ * back rather than near the middle, so the glass runs down to the nose in one
+ * long slope instead of bulging over the cockpit. The old profile was a bubble
+ * — correct for a canopy you climb into, wrong for something doing 400 km/h.
+ */
+export function buildCanopy(hull: HullSpec): BufferGeometry {
   const sweep = emptySweep();
-  const rings = 10;
+  const rings = 12;
   const across = 9;
-  const fromZ = -hull.length * 0.16;
+  // Forward is -z. Reaching further forward is what buys the rake.
+  const fromZ = -hull.length * 0.26;
   const toZ = hull.length * 0.2;
-  const rise = hull.height * (0.55 + hull.canopy * 1.35);
-  const halfBeam = hull.beam * 0.24;
+  const rise = hull.height * (0.55 + hull.canopy * 1.35) * 0.5;
+  const halfBeam = hull.beam * 0.22;
+  /** Where along the canopy the screen tops out, 0 at the nose end. */
+  const peak = 0.74;
 
   for (let i = 0; i < rings; i++) {
     const t = i / (rings - 1);
     const z = lerp(fromZ, toZ, t);
-    // Teardrop: rises quickly from the nose end, falls away toward the tail.
-    const shape = Math.sin(Math.PI * Math.pow(t, 0.8));
+    // A long concave ramp up from the nose, then a short fastback to the tail.
+    const shape = t <= peak
+      ? Math.pow(t / peak, 1.4)
+      : Math.cos(((t - peak) / (1 - peak)) * (Math.PI / 2));
     for (let c = 0; c < across; c++) {
       const a = (c / (across - 1)) * Math.PI;
       sweep.positions.push(
@@ -265,6 +298,54 @@ function buildThrusters(hull: HullSpec): BufferGeometry {
 }
 
 /**
+ * The exhaust plumes: one open cone behind each nozzle.
+ *
+ * Built at a reference length and stretched in the vertex stage, so the flame
+ * grows with speed without touching a buffer. `uv().y` runs 0 at the nozzle
+ * mouth to 1 at the tip, which is the only coordinate the shader needs — the
+ * stretch, the colour ramp and the fade all key off it.
+ */
+function buildFlames(hull: HullSpec): BufferGeometry {
+  const sweep = emptySweep();
+  const count = hull.thrusters;
+  const radius = Math.min(0.62, (hull.beam * 0.5) / (count * 1.7));
+  const segments = 12;
+  const rings = 8;
+  const mouthZ = hull.length * 0.5;
+
+  for (let n = 0; n < count; n++) {
+    const spread = count === 1 ? 0 : (n / (count - 1) - 0.5) * hull.beam * 0.52;
+    for (let ring = 0; ring < rings; ring++) {
+      const t = ring / (rings - 1);
+      // Swells just past the mouth, then necks down to a point.
+      const taper = Math.sin(Math.PI * Math.pow(t, 0.45)) * (1 - t * 0.35) + 0.08;
+      const r = radius * 0.92 * taper;
+      for (let c = 0; c < segments; c++) {
+        const a = (c / segments) * Math.PI * 2;
+        sweep.positions.push(
+          spread + Math.cos(a) * r,
+          hull.height * 0.05 + Math.sin(a) * r * 0.8,
+          mouthZ + t * FLAME_REFERENCE,
+        );
+        sweep.uvs.push(c / segments, t);
+      }
+    }
+    const base = n * rings * segments;
+    for (let ring = 0; ring < rings - 1; ring++) {
+      for (let c = 0; c < segments; c++) {
+        const c2 = (c + 1) % segments;
+        const a = base + ring * segments + c;
+        const b = base + ring * segments + c2;
+        const d = a + segments;
+        const e = b + segments;
+        sweep.indices.push(a, d, b, b, d, e);
+      }
+    }
+  }
+  return toGeometry(sweep);
+}
+
+/**
  * One craft's visual model, built entirely from its team's `HullSpec`.
  *
  * Nothing here is loaded: the silhouette, the livery and the engine glow all
@@ -294,6 +375,16 @@ export class GliderModel {
       mesh.receiveShadow = true;
       this.group.add(mesh);
     }
+
+    // The plume is additive and casts nothing. A flame that throws a shadow
+    // reads as a solid object stuck to the back of the craft.
+    const flames = new Mesh(buildFlames(hull), this.flameMaterial(accent));
+    flames.castShadow = false;
+    flames.receiveShadow = false;
+    flames.frustumCulled = false;
+    flames.renderOrder = 4;
+    this.group.add(flames);
+
     this.group.name = `glider:${team.id}`;
   }
 
@@ -315,6 +406,59 @@ export class GliderModel {
         (object.material as { dispose(): void }).dispose();
       }
     });
+  }
+
+  /**
+   * The exhaust plume.
+   *
+   * Additive, depth-tested but not depth-writing, so plumes overlap cleanly and
+   * never occlude the craft behind them. Length and brightness are driven by
+   * the same speed fraction the livery uses; a craft on the grid has no flame
+   * at all, and a craft off a speed pad has one about twice as long as cruise.
+   *
+   * The colour ramp is plasma rather than campfire: white at the throat, the
+   * team's accent through the body of the flame, and a warm tip where it burns
+   * out. Everything else on the craft is cold, and the exhaust is the only
+   * place the eye is told there is energy involved.
+   */
+  private flameMaterial(accent: Color): MeshBasicNodeMaterial {
+    const material = new MeshBasicNodeMaterial();
+    const along = uv().y;
+    const drive = this.thrustUniform.mul(0.75).add(this.boostUniform.mul(0.85)).clamp(0, 1.6);
+
+    // Stretch along the plume's own axis. The geometry is built at
+    // FLAME_REFERENCE metres, so this is a multiplier, not a length.
+    const stretch = drive.mul(1.25).add(0.12);
+    material.positionNode = positionLocal.add(
+      vec3(0, 0, along.mul(stretch.sub(1)).mul(FLAME_REFERENCE)),
+    );
+
+    // Turbulence scrolling out of the nozzle, plus a faster flicker on top.
+    const churn = mx_fractal_noise_float(
+      vec3(uv().x.mul(6), along.mul(3).sub(time.mul(5.5)), time.mul(0.9)),
+      3,
+    ).mul(0.5).add(0.5);
+    const flicker = sin(time.mul(31).add(along.mul(9))).mul(0.06).add(0.94);
+
+    // Fades out along its length, and the edge of the cone is thinner than its
+    // core, which is what keeps it from reading as a painted cardboard shape.
+    const taper = smoothstep(float(1), float(0.15), along);
+    const throat = smoothstep(float(0.18), float(0), along);
+
+    const body = mix(color(accent), color(0xffb257), smoothstep(float(0.15), float(0.85), along));
+    const tint = mix(body, color(0xffffff), throat);
+
+    // Kept well under the bloom threshold's knee. The first version ran hot
+    // enough that the plume bloomed into a white disc and stopped reading as a
+    // flame at all.
+    material.colorNode = tint.mul(flicker).mul(mix(float(0.35), float(0.85), churn));
+    material.opacityNode = taper.mul(churn).mul(drive.clamp(0, 1)).mul(0.5);
+    material.transparent = true;
+    material.depthWrite = false;
+    material.blending = AdditiveBlending;
+    material.side = DoubleSide;
+    material.fog = false;
+    return material;
   }
 
   /**

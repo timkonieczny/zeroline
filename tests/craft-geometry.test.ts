@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Vector3 } from 'three';
-import { buildFins, buildHull } from '@/game/GliderModel';
+import { buildCanopy, buildFins, buildHull } from '@/game/GliderModel';
 import { TEAMS } from '@/data/teams';
 import type { BufferGeometry } from 'three';
 
@@ -88,4 +88,50 @@ describe('craft geometry', () => {
       expect(geometry.getIndex()!.count % 3).toBe(0);
     }
   });
+});
+
+/**
+ * The canopy is a screen, not a bubble.
+ *
+ * Both properties here were asked for by eye and are trivially easy to undo by
+ * eye as well, which is exactly why they are pinned: a canopy that creeps back
+ * up in height and loses its rake looks fine in isolation and wrong beside the
+ * craft it belongs to.
+ */
+describe('canopy profile', () => {
+  for (const team of TEAMS) {
+    it(`slopes forward and stays low on ${team.id}`, () => {
+      const geometry = buildCanopy(team.hull);
+      const position = geometry.getAttribute('position');
+
+      let frontPeak = -Infinity;
+      let rearPeak = -Infinity;
+      let overall = -Infinity;
+      let minZ = Infinity;
+      let maxZ = -Infinity;
+
+      for (let i = 0; i < position.count; i++) {
+        const y = position.getY(i);
+        const z = position.getZ(i);
+        minZ = Math.min(minZ, z);
+        maxZ = Math.max(maxZ, z);
+        overall = Math.max(overall, y);
+      }
+
+      // Forward is -z. Split the canopy at its midpoint and compare halves.
+      const middle = (minZ + maxZ) / 2;
+      for (let i = 0; i < position.count; i++) {
+        const y = position.getY(i);
+        if (position.getZ(i) < middle) frontPeak = Math.max(frontPeak, y);
+        else rearPeak = Math.max(rearPeak, y);
+      }
+
+      // The rear half carries the height; the front is the windscreen.
+      expect(rearPeak).toBeGreaterThan(frontPeak);
+
+      // And the whole thing stays under the hull's own height. A canopy taller
+      // than the body it sits on is the bulbous look this replaced.
+      expect(overall).toBeLessThan(team.hull.height * 1.35);
+    });
+  }
 });

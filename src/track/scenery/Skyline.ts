@@ -1,6 +1,22 @@
-import { BoxGeometry, Color, Group, InstancedMesh, Object3D, Vector3 } from 'three';
+import { BoxGeometry, Color, Group, InstancedMesh, Matrix4, Object3D, Vector3 } from 'three';
 import { MeshStandardNodeMaterial } from 'three/webgpu';
-import { color, float, floor, fract, instanceIndex, mix, sin, smoothstep, step, uv, vec3 } from 'three/tsl';
+import {
+  cameraPosition,
+  color,
+  float,
+  floor,
+  fract,
+  instanceIndex,
+  mix,
+  normalWorld,
+  positionWorld,
+  pow,
+  sin,
+  smoothstep,
+  step,
+  uv,
+  vec3,
+} from 'three/tsl';
 import type { Track } from '../Track';
 import type { SceneryTheme } from '../TrackTypes';
 import { SEA_LEVEL } from './Environment';
@@ -57,18 +73,21 @@ interface ThemeRule {
  * 400 km/h a district only registers if its silhouette is unmistakable.
  */
 const THEMES: Record<SceneryTheme, ThemeRule> = {
-  harbour: { density: 0.55, offset: [26, 130], footprint: [16, 42], height: [14, 62], glass: 0.4 },
-  canyon: { density: 0.85, offset: [12, 46], footprint: [12, 26], height: [50, 155], glass: 0.25 },
-  terminal: { density: 0.7, offset: [18, 70], footprint: [30, 70], height: [10, 26], glass: 0.15 },
-  towers: { density: 0.5, offset: [34, 180], footprint: [18, 40], height: [70, 220], glass: 0.75 },
-  stadium: { density: 0.6, offset: [22, 90], footprint: [26, 60], height: [18, 46], glass: 0.3 },
+  harbour: { density: 0.55, offset: [26, 130], footprint: [16, 42], height: [28, 124], glass: 0.4 },
+  canyon: { density: 0.85, offset: [12, 46], footprint: [12, 26], height: [100, 310], glass: 0.25 },
+  terminal: { density: 0.7, offset: [18, 70], footprint: [30, 70], height: [20, 52], glass: 0.15 },
+  towers: { density: 0.5, offset: [34, 180], footprint: [18, 40], height: [140, 440], glass: 0.75 },
+  stadium: { density: 0.6, offset: [22, 90], footprint: [26, 60], height: [36, 92], glass: 0.3 },
 };
 
 const _dummy = new Object3D();
+const _matrix = new Matrix4();
 const _position = new Vector3();
 
 /** One placed building, kept so platforms and bridges can be fitted afterwards. */
 interface Block {
+  /** Which instance in the skyline mesh this is. */
+  index: number;
   position: Vector3;
   /** Half the footprint's diagonal — the radius that must stay clear. */
   radius: number;
@@ -112,11 +131,19 @@ export class Skyline {
 
   constructor(track: Track) {
     const rng = new Rng(0xb0d1e5);
+    const sun = track.definition.sun;
+    const elevation = (sun.elevation * Math.PI) / 180;
+    const azimuth = (sun.azimuth * Math.PI) / 180;
+    const sunDirection: [number, number, number] = [
+      Math.cos(elevation) * Math.cos(azimuth),
+      Math.sin(elevation),
+      Math.cos(elevation) * Math.sin(azimuth),
+    ];
     const geometry = new BoxGeometry(1, 1, 1);
     // Origin at the base, so scaling a building grows it upward.
     geometry.translate(0, 0.5, 0);
 
-    this.mesh = new InstancedMesh(geometry, Skyline.material(), CAPACITY);
+    this.mesh = new InstancedMesh(geometry, Skyline.material(sunDirection), CAPACITY);
     this.mesh.name = 'skyline';
     this.mesh.castShadow = true;
     this.mesh.receiveShadow = true;
@@ -143,7 +170,25 @@ export class Skyline {
     const flushPlatform = (): void => {
       if (pending.length === 0) return;
       if (deckCount < DECK_CAPACITY) {
-        Skyline.writePlatform(this.decks, deckCount++, pending, pendingDeck);
+        // A platform is wider than the buildings that sit on it, so a cluster
+        // that cleared the circuit individually could still have its deck laid
+        // across the road. Checked here rather than at placement.
+        if (Skyline.writePlatform(this.decks, deckCount, pending, pendingDeck, road)) {
+          deckCount++;
+        } else {
+          // No deck, so the cluster cannot stand on one. Re-seat each building
+          // on the water at the height it would have reached anyway, or they
+          // hang in the air where their platform used to be.
+          for (const block of pending) {
+            block.baseY = SEA_LEVEL;
+            block.position.setY(SEA_LEVEL);
+            this.mesh.getMatrixAt(block.index, _matrix);
+            _matrix.decompose(_dummy.position, _dummy.quaternion, _dummy.scale);
+            _dummy.position.setY(SEA_LEVEL);
+            _dummy.updateMatrix();
+            this.mesh.setMatrixAt(block.index, _dummy.matrix);
+          }
+        }
       }
       pending = [];
     };
@@ -207,7 +252,7 @@ export class Skyline {
         this.mesh.setColorAt(count, colour);
         count++;
 
-        const block: Block = { position: _dummy.position.clone(), radius, height: rise, baseY };
+        const block: Block = { index: count - 1, position: _dummy.position.clone(), radius, height: rise, baseY };
         blocks.push(block);
         if (onPlatform) {
           pending.push(block);
@@ -302,13 +347,19 @@ export class Skyline {
     return false;
   }
 
-  /** A shared concrete deck under a cluster, standing out of the water. */
+  /**
+   * A shared concrete deck under a cluster, standing out of the water.
+   *
+   * Returns false if the slab would cross the circuit, in which case the
+   * cluster simply stands in the water instead.
+   */
   private static writePlatform(
     decks: InstancedMesh,
     index: number,
     group: readonly Block[],
     deckY: number,
-  ): void {
+    road: readonly RoadSample[],
+  ): boolean {
     let minX = Infinity;
     let maxX = -Infinity;
     let minZ = Infinity;
@@ -321,12 +372,27 @@ export class Skyline {
     }
     const margin = 9;
     const thickness = deckY - (SEA_LEVEL - 4);
+    const centreX = (minX + maxX) / 2;
+    const centreZ = (minZ + maxZ) / 2;
+    const width = maxX - minX + margin * 2;
+    const depth = maxZ - minZ + margin * 2;
 
-    _dummy.position.set((minX + maxX) / 2, SEA_LEVEL - 4 + thickness / 2, (minZ + maxZ) / 2);
+    // Tested as the rectangle it is. A circumscribed disc rejected most of the
+    // platforms on the circuit's inside, where the slab is long and thin and
+    // its diagonal says nothing useful.
+    for (const sample of road) {
+      if (Math.abs(sample.y - deckY) > VERTICAL_CLEARANCE) continue;
+      const dx = Math.max(0, Math.abs(sample.x - centreX) - width / 2);
+      const dz = Math.max(0, Math.abs(sample.z - centreZ) - depth / 2);
+      if (Math.hypot(dx, dz) < sample.keepOut) return false;
+    }
+
+    _dummy.position.set(centreX, SEA_LEVEL - 4 + thickness / 2, centreZ);
     _dummy.rotation.set(0, 0, 0);
-    _dummy.scale.set(maxX - minX + margin * 2, thickness, maxZ - minZ + margin * 2);
+    _dummy.scale.set(width, thickness, depth);
     _dummy.updateMatrix();
     decks.setMatrixAt(index, _dummy.matrix);
+    return true;
   }
 
   /**
@@ -417,7 +483,7 @@ export class Skyline {
    * looking like an untuned television. Flooring the scaled UV first gives one
    * random value per window, which is what makes it read as a building.
    */
-  private static material(): MeshStandardNodeMaterial {
+  private static material(sunDirection: [number, number, number]): MeshStandardNodeMaterial {
     const material = new MeshStandardNodeMaterial();
     const seed = instanceIndex.toFloat();
 
@@ -452,13 +518,58 @@ export class Skyline {
     // row of dark slabs through the middle of a bright city.
     const tint = mix(vec3(0.62, 0.72, 0.8), vec3(0.78, 0.87, 0.93), pane);
 
-    material.colorNode = mix(concrete, tint, glass);
+    // --- What the glass actually shows ---------------------------------
+    //
+    // Leaving this to the scene's environment map was the mistake: that probe
+    // is a smooth sky gradient at 42% intensity, so a metallic facade came
+    // back as flat dark blue paint and read as no reflection at all. There is
+    // nothing wrong with the probe — there is simply nothing in it to see.
+    //
+    // So the reflection is computed here instead, against a sky and sea
+    // written as arithmetic: bright at the horizon, deep overhead, water
+    // below, a sun glint, and a band of city at eye level. A real probe per
+    // building is out of the question and screen-space reflection costs a
+    // pass; this costs a dozen instructions and is the only version of the
+    // three that has structure in it, which is the whole point.
+    const view = positionWorld.sub(cameraPosition).normalize();
+    const bounce = view.sub(normalWorld.mul(view.dot(normalWorld).mul(2))).normalize();
+    const up = bounce.y;
+
+    const zenith = vec3(0.16, 0.36, 0.72);
+    const horizon = vec3(0.86, 0.93, 1.0);
+    const water = vec3(0.1, 0.26, 0.34);
+    const sky = mix(horizon, zenith, smoothstep(float(0.02), float(0.5), up));
+    const sea = mix(horizon, water, smoothstep(float(-0.02), float(-0.35), up));
+    let mirror = mix(sea, sky, step(float(0), up));
+
+    // A band of city across the horizon: vertical stripes that only exist
+    // where the reflection is looking level. Enough to break the gradient up,
+    // not enough to pretend it is a real skyline.
+    const level = smoothstep(float(0.16), float(0), up.abs());
+    const stripe = step(float(0.45), fract(bounce.x.div(bounce.z.abs().add(0.35)).mul(3.7)));
+    mirror = mix(mirror, mirror.mul(0.62), stripe.mul(level).mul(0.7));
+
+    const glint = pow(bounce.dot(vec3(...sunDirection)).max(0), 220);
+    mirror = mirror.add(vec3(1.0, 0.94, 0.82).mul(glint).mul(2.2));
+
+    // Fresnel. Head on, a window is mostly its own tint; at a grazing angle
+    // it is a mirror. Without this the whole city reflects equally and reads
+    // as chrome rather than as glass.
+    const facing = view.dot(normalWorld).abs();
+    const fresnel = mix(float(0.22), float(0.96), pow(facing.oneMinus(), 3));
+    // Mullions stay opaque; only the panes mirror anything.
+    const glazed = mix(tint, mix(tint, mirror, fresnel), pane);
+
+    material.colorNode = mix(concrete, glazed, glass);
     // Barely there. Lit windows are a detail on a daylit facade; turned up they
     // make a shadowed street read as night, which the canyon district does more
     // than enough of on its own.
     material.emissiveNode = color(0xfff2dc).mul(lit).mul(mix(float(0.13), float(0.07), glass));
     material.roughnessNode = mix(mix(float(0.74), float(0.2), pane), mix(float(0.22), float(0.06), pane), glass);
-    material.metalnessNode = mix(float(0.05), float(0.6), glass);
+    // The reflection above is already in `colorNode`, so the environment probe
+    // only has to add a little sheen. At the old 0.6 the two stacked and the
+    // facades went dark again.
+    material.metalnessNode = mix(float(0.05), float(0.12), glass);
     material.vertexColors = true;
     return material;
   }
