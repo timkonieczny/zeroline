@@ -48,10 +48,16 @@ export class Renderer {
   private frameTimeSum = 0;
   private frameTimeCount = 0;
 
-  /** Milliseconds the GPU spent on the last frame it was asked about. */
+  /** Mean GPU milliseconds per frame, over the last drained window. */
   private lastGpuMs = 0;
+  /** Frames rendered since the timestamp pool was last drained. */
+  private framesSinceDrain = 0;
+  /** How many frames the resolve currently in flight is accounting for. */
+  private framesInFlight = 0;
   /** True while a timestamp resolve is in flight, so they do not stack up. */
   private resolvingGpuTime = false;
+  /** False when the device cannot answer timestamp queries; see `init`. */
+  private gpuTiming = false;
 
   /** What the GPU we ended up on calls itself. Shown on the F3 overlay. */
   private adapterName = 'unknown';
@@ -109,6 +115,7 @@ export class Renderer {
   async init(): Promise<void> {
     await this.claimAdapter();
     await this.renderer.init();
+    this.checkGpuTiming();
     if (!this.canvas.isConnected) document.body.appendChild(this.canvas);
     this.watchPixelRatio();
     window.addEventListener('resize', this.onResize);
@@ -129,15 +136,7 @@ export class Renderer {
         .filter((part) => part)
         .join(' ') || 'unnamed adapter';
 
-      // Every feature the adapter offers, which is what three asks for when it
-      // creates the device itself. Taking that job over and then requesting
-      // nothing left the renderer without timestamp queries — and without
-      // `core-features-and-limits`, which three reads as compatibility mode and
-      // answers by turning multisampling off. A device is not a smaller thing
-      // than the adapter it came from unless you ask for one.
-      const device = await adapter.requestDevice({
-        requiredFeatures: [...adapter.features] as GPUFeatureName[],
-      });
+      const device = await Renderer.claimDevice(adapter);
       (this.renderer as unknown as { backend: { parameters: { device?: GPUDevice } } }).backend.parameters.device =
         device;
     } catch {
@@ -145,6 +144,51 @@ export class Renderer {
       // request an adapter itself on `init`.
       this.adapterName = 'default adapter';
     }
+  }
+
+  /**
+   * A device carrying every feature its adapter offers, which is what three
+   * asks for when it creates the device itself. Taking that job over and then
+   * requesting nothing left the renderer without timestamp queries — and
+   * without `core-features-and-limits`, which three reads as compatibility mode
+   * and answers by turning multisampling off.
+   *
+   * Note that limits are a separate question: neither this nor three's own path
+   * raises them, so the device gets the WebGPU defaults rather than everything
+   * the adapter could do.
+   *
+   * If the full feature list is refused for any reason, a plain request is
+   * tried before giving up. Falling out of here means falling back to three,
+   * which asks for `featureLevel: 'compatibility'` — the integrated-GPU path
+   * this whole method exists to avoid — so it is worth one more attempt.
+   */
+  private static async claimDevice(adapter: GPUAdapter): Promise<GPUDevice> {
+    try {
+      return await adapter.requestDevice({
+        requiredFeatures: [...adapter.features] as GPUFeatureName[],
+      });
+    } catch {
+      return adapter.requestDevice();
+    }
+  }
+
+  /**
+   * Turns timestamp tracking off unless the device can actually serve it.
+   *
+   * three attaches `timestampWrites` to every render pass as soon as
+   * `trackTimestamp` is set and never checks the device's features. On a device
+   * without `timestamp-query` the query set is invalid, so every pass it is
+   * attached to fails validation and the frame comes out blank. The guard has
+   * to be ours, and it has to cover three's own device as well as the one
+   * `claimAdapter` hands over.
+   */
+  private checkGpuTiming(): void {
+    const backend = this.renderer.backend as unknown as {
+      device?: GPUDevice;
+      trackTimestamp?: boolean;
+    };
+    this.gpuTiming = backend.device?.features?.has('timestamp-query') === true;
+    if (!this.gpuTiming) backend.trackTimestamp = false;
   }
 
   dispose(): void {
@@ -196,6 +240,9 @@ export class Renderer {
    * never visibly pumps, and recovers more slowly than it drops.
    */
   reportFrame(frameTime: number): void {
+    // Counted before the early return: the GPU timer needs to know how many
+    // frames its next total covers whether or not the scaler is running.
+    this.framesSinceDrain++;
     if (!this.adaptive) return;
     this.frameTimeSum += frameTime;
     this.frameTimeCount++;
@@ -217,14 +264,32 @@ export class Renderer {
    * next one. Called a few times a second from the perf overlay, that is a
    * reading a fraction of a second old, which is what a tuning number needs to
    * be and no more.
+   *
+   * It has to be called whether or not anyone is looking. three's query pool
+   * holds 2048 timestamps and simply stops recording once it is full, which a
+   * frame of twenty-odd passes reaches in about a second, so a pool nobody
+   * drains warns to the console and then hands back a frame from the opening
+   * seconds of the session.
+   *
+   * And the pool answers with the *total* across every pass it has accumulated
+   * since it was last drained, not with one frame. Drained four times a second
+   * at sixty frames a second, that total is fifteen frames of work and the
+   * number on the overlay is fifteen times what a frame costs — a reading that
+   * also moves when the drain rate does, which is the worst property a tuning
+   * number can have. So the frames are counted and the total divided by them.
    */
   gpuTime(): number {
-    if (!this.resolvingGpuTime) {
+    if (this.gpuTiming && !this.resolvingGpuTime) {
       this.resolvingGpuTime = true;
+      // Captured now: the pool resets when the resolve lands, so these are the
+      // frames that total belongs to.
+      this.framesInFlight = Math.max(1, this.framesSinceDrain);
+      this.framesSinceDrain = 0;
       void this.renderer
         .resolveTimestampsAsync()
-        .then(() => {
-          this.lastGpuMs = this.renderer.info.render.timestamp;
+        .then((ms) => {
+          // Undefined when there is no pool yet, i.e. before the first pass.
+          if (typeof ms === 'number') this.lastGpuMs = ms / this.framesInFlight;
         })
         .catch(() => undefined)
         .finally(() => {

@@ -331,6 +331,13 @@ export class App {
   }
 
   private render(alpha: number, frameTime: number): void {
+    // Explicitly, rather than relying on three's own animation loop to do it.
+    // That loop is started unconditionally by `renderer.init()` and does reset
+    // the counters every frame, so the overlay's figures were already per-frame
+    // and not session totals — but the game never asked for that loop and does
+    // not drive its rendering from it, so leaning on its bookkeeping is a
+    // dependency waiting to be surprised by.
+    this.renderer.renderer.info.reset();
     this.input.update(frameTime);
 
     if (this.transitioning) this.input.clearMenuActions();
@@ -413,10 +420,14 @@ export class App {
   }
 
   private updatePerf(frameTime: number): void {
-    if (this.perf.hidden) return;
     this.perfTimer += frameTime;
     if (this.perfTimer < 0.25) return;
     this.perfTimer = 0;
+
+    // Drained whether or not the overlay is up: the timestamp pool fills in
+    // about a second of play and stops recording until someone empties it.
+    const gpuMs = this.renderer.gpuTime();
+    if (this.perf.hidden) return;
 
     const stats = this.renderer.stats;
     const info = this.renderer.renderer.info;
@@ -424,7 +435,7 @@ export class App {
 
     this.perf.textContent = [
       `${(1 / Math.max(frameTime, 1e-6)).toFixed(0).padStart(3)} fps   ${(frameTime * 1000).toFixed(2)} ms`,
-      `gpu        ${this.renderer.gpuTime().toFixed(2)} ms`,
+      `gpu        ${gpuMs.toFixed(2)} ms/frame`,
       `mode       ${this.mode}`,
       `backend    ${stats.backend}`,
       `adapter    ${stats.adapter}`,
