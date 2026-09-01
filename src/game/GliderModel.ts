@@ -219,6 +219,12 @@ export function buildFins(hull: HullSpec): BufferGeometry {
  * back rather than near the middle, so the glass runs down to the nose in one
  * long slope instead of bulging over the cockpit. The old profile was a bubble
  * — correct for a canopy you climb into, wrong for something doing 400 km/h.
+ *
+ * Every ring is seated on the hull's own deck at that station rather than at
+ * one fixed height. Sitting them all at 55% of the hull's height worked for the
+ * craft whose noses stay tall and left the others with their screen tapering to
+ * a point in mid-air ahead of the bodywork — the deck drops away toward the
+ * nose and the canopy did not follow it down.
  */
 export function buildCanopy(hull: HullSpec): BufferGeometry {
   const sweep = emptySweep();
@@ -228,9 +234,11 @@ export function buildCanopy(hull: HullSpec): BufferGeometry {
   const fromZ = -hull.length * 0.26;
   const toZ = hull.length * 0.2;
   const rise = hull.height * (0.55 + hull.canopy * 1.35) * 0.5;
-  const halfBeam = hull.beam * 0.22;
+  const beam = hull.beam * 0.22;
   /** Where along the canopy the screen tops out, 0 at the nose end. */
   const peak = 0.74;
+  /** How far the skirt is buried in the hull, in metres. */
+  const sink = hull.height * 0.07;
 
   for (let i = 0; i < rings; i++) {
     const t = i / (rings - 1);
@@ -239,11 +247,18 @@ export function buildCanopy(hull: HullSpec): BufferGeometry {
     const shape = t <= peak
       ? Math.pow(t / peak, 1.4)
       : Math.cos(((t - peak) / (1 - peak)) * (Math.PI / 2));
+
+    // The hull's own deck and beam at this station, from the same profiles the
+    // hull sweep uses. Following them is what keeps the join closed.
+    const station = clamp01(z / hull.length + 0.5);
+    const deck = hull.height * heightProfile(station, hull.nose) - sink;
+    const halfBeam = Math.min(beam, hull.beam * 0.5 * beamProfile(station, hull.nose) * 0.62);
+
     for (let c = 0; c < across; c++) {
       const a = (c / (across - 1)) * Math.PI;
       sweep.positions.push(
         Math.cos(a) * halfBeam * shape,
-        hull.height * 0.55 + Math.sin(a) * rise * shape,
+        deck + Math.sin(a) * rise * shape,
         z,
       );
       sweep.uvs.push(c / (across - 1), t);

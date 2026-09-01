@@ -135,3 +135,59 @@ describe('canopy profile', () => {
     });
   }
 });
+
+/**
+ * The canopy has to touch the hull it sits on.
+ *
+ * Every canopy vertex is compared against the hull's own surface at the same
+ * station: the skirt must be inside the bodywork, and the forward tip must be
+ * buried in the nose rather than tapering to a point in the air ahead of it.
+ * The gap this catches is invisible from the chase camera and obvious from the
+ * showroom, which is exactly the kind that survives a change.
+ */
+describe('canopy seating', () => {
+  for (const team of TEAMS) {
+    it(`sits on the hull of ${team.id}`, () => {
+      const canopy = buildCanopy(team.hull);
+      const hull = buildHull(team.hull);
+      const canopyPosition = canopy.getAttribute('position');
+      const hullPosition = hull.getAttribute('position');
+
+      /** The hull's highest point within a slice around this station. */
+      const deckAt = (z: number): number => {
+        const window = team.hull.length * 0.06;
+        let top = -Infinity;
+        for (let i = 0; i < hullPosition.count; i++) {
+          if (Math.abs(hullPosition.getZ(i) - z) > window) continue;
+          top = Math.max(top, hullPosition.getY(i));
+        }
+        return top;
+      };
+
+      let minZ = Infinity;
+      for (let i = 0; i < canopyPosition.count; i++) {
+        minZ = Math.min(minZ, canopyPosition.getZ(i));
+      }
+
+      // The forward tip: every vertex at the canopy's leading edge must be at
+      // or under the deck, which is what "no gap" means.
+      let tipClearance = -Infinity;
+      for (let i = 0; i < canopyPosition.count; i++) {
+        if (canopyPosition.getZ(i) > minZ + 1e-4) continue;
+        tipClearance = Math.max(tipClearance, canopyPosition.getY(i) - deckAt(minZ));
+      }
+      expect(tipClearance).toBeLessThanOrEqual(0);
+
+      // And the skirt is inside the hull the whole way along, not resting on
+      // top of it, so the join has no seam to show through.
+      for (let i = 0; i < canopyPosition.count; i++) {
+        const x = canopyPosition.getX(i);
+        const y = canopyPosition.getY(i);
+        const z = canopyPosition.getZ(i);
+        // Only the skirt: the roof is supposed to stand proud.
+        if (Math.abs(y - (deckAt(z) - team.hull.height * 0.07)) > 1e-3) continue;
+        expect(Math.abs(x)).toBeLessThan(team.hull.beam * 0.5);
+      }
+    });
+  }
+});
