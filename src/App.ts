@@ -50,6 +50,9 @@ const MENU_QUALITY: PostFXQuality = {
   speedEffects: false,
   bloomStrength: 0.3,
   lensflare: true,
+  // No occlusion in the showroom: it is a white room lit by soft boxes, which
+  // is the one lighting setup that has almost none to find.
+  gtao: false,
 };
 
 /**

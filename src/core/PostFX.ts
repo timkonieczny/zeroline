@@ -23,6 +23,7 @@ import {
 import { bloom } from 'three/addons/tsl/display/BloomNode.js';
 import { motionBlur } from 'three/addons/tsl/display/MotionBlur.js';
 import { lensflare } from 'three/addons/tsl/display/LensflareNode.js';
+import { ao } from 'three/addons/tsl/display/GTAONode.js';
 import { traa } from 'three/addons/tsl/display/TRAANode.js';
 import { smaa } from 'three/addons/tsl/display/SMAANode.js';
 import { chromaticAberration } from 'three/addons/tsl/display/ChromaticAberrationNode.js';
@@ -55,16 +56,18 @@ export interface PostFXQuality {
   motionBlurSamples: number;
   /** Ghosts and streaks pivoted around the centre from every bright spot. */
   lensflare: boolean;
+  /** Ground-truth ambient occlusion: contact darkening where surfaces meet. */
+  gtao: boolean;
   /** Speed-driven radial streaks and chromatic fringing. */
   speedEffects: boolean;
   bloomStrength: number;
 }
 
 export const QUALITY_PRESETS: Record<QualityLevel, PostFXQuality> = {
-  low: { antialias: 'none', motionBlur: false, motionBlurSamples: 8, speedEffects: false, bloomStrength: 0.2, lensflare: false },
-  medium: { antialias: 'smaa', motionBlur: true, motionBlurSamples: 10, speedEffects: true, bloomStrength: 0.26, lensflare: true },
-  high: { antialias: 'smaa', motionBlur: true, motionBlurSamples: 16, speedEffects: true, bloomStrength: 0.32, lensflare: true },
-  ultra: { antialias: 'smaa', motionBlur: true, motionBlurSamples: 24, speedEffects: true, bloomStrength: 0.36, lensflare: true },
+  low: { antialias: 'none', motionBlur: false, motionBlurSamples: 8, speedEffects: false, bloomStrength: 0.2, lensflare: false, gtao: false },
+  medium: { antialias: 'smaa', motionBlur: true, motionBlurSamples: 10, speedEffects: true, bloomStrength: 0.26, lensflare: true, gtao: false },
+  high: { antialias: 'smaa', motionBlur: true, motionBlurSamples: 16, speedEffects: true, bloomStrength: 0.32, lensflare: true, gtao: true },
+  ultra: { antialias: 'smaa', motionBlur: true, motionBlurSamples: 24, speedEffects: true, bloomStrength: 0.36, lensflare: true, gtao: true },
 };
 
 /**
@@ -89,6 +92,29 @@ const TUNNEL_EXPOSURE = 2.15;
 /** How fast the eye opens up in the dark, and closes again in the light. */
 const ADAPT_TO_DARK = 1.1;
 const ADAPT_TO_LIGHT = 2.4;
+
+/**
+ * Radius the occlusion is gathered over, in metres.
+ *
+ * Wide. Tried at two metres first, which is the usual advice and is meant for
+ * rooms: on a thirty-metre road under an open sky it darkened a hairline at the
+ * foot of each barrier and nothing else. At fourteen it reads as sky occlusion
+ * rather than contact shading — the road along the barriers, the underside of
+ * the elevated sections, one building against the next — which is the half of a
+ * bake's look that is worth having outdoors.
+ */
+const GTAO_RADIUS = 14;
+/** Half resolution. The term is low frequency and the upsample is free. */
+const GTAO_SCALE = 0.5;
+/**
+ * Samples per pixel. Twice the node's default.
+ *
+ * At sixteen the term carries a visible crosshatch grain over flat road, which
+ * on white concrete is worse than the occlusion is good. Thirty-two clears it
+ * without a denoise pass, which would have cost another dependent full-screen
+ * read to fix something the sample count fixes directly.
+ */
+const GTAO_SAMPLES = 32;
 
 const BLUR_SCALE_MAX = 1.6;
 
@@ -126,6 +152,8 @@ export class PostFX {
    * the road rather than as an artefact of the lens.
    */
   private readonly flareStrength = uniform(0.32);
+  /** How much of the occlusion term is applied. */
+  private readonly aoStrength = uniform(0.62);
   /** Scene exposure, eased by `setDrive` to stand in for the eye adapting. */
   private readonly exposure = uniform(1);
   private smoothedExposure = 1;
@@ -163,6 +191,35 @@ export class PostFX {
     let node = asColour(colour);
     if (quality.antialias === 'traa') node = asColour(traa(colour, depthTexture, velocityTexture, camera));
     else if (quality.antialias === 'smaa') node = asColour(smaa(colour));
+
+    if (quality.gtao) {
+      // Ground-truth ambient occlusion, from depth alone.
+      //
+      // The node will take a normal target if the scene pass writes one, and
+      // reconstructs normals from depth when it does not. A third full-screen
+      // attachment written every frame is real bandwidth on an integrated GPU —
+      // which is the part of this frame that is actually scarce — so it starts
+      // without one. If the road's grazing angles turn out to need real
+      // normals, the fix is `normal: normalView` in the MRT above and passing
+      // the texture in here.
+      // The node's own documentation says normals may be omitted and the
+      // shader will reconstruct them from depth. Only its type declaration
+      // disagrees, so the null goes in through a cast rather than the
+      // decision being made by a `.d.ts`.
+      const withoutNormals = null as unknown as Parameters<typeof ao>[1];
+      const occlusion = ao(depthTexture, withoutNormals, camera);
+      occlusion.resolutionScale = GTAO_SCALE;
+      occlusion.radius.value = GTAO_RADIUS;
+      occlusion.samples.value = GTAO_SAMPLES;
+
+      // Mixed toward 1 rather than multiplied outright. Occlusion belongs on
+      // indirect light, and a post pass has only the finished colour, so a raw
+      // multiply darkens direct sunlight too — which on white concrete reads as
+      // dirt rather than as shade. The scene's indirect is one hemisphere fill,
+      // so a partial term is a fair approximation of darkening that and leaving
+      // the sun alone.
+      node = asColour(node.mul(mix(float(1), occlusion.getTextureNode().r, this.aoStrength)));
+    }
 
     // Exposure goes here: after the antialiasing, which both branches feed from
     // the raw scene texture, and before everything that reacts to brightness.
