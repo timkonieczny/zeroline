@@ -370,13 +370,32 @@ export class Hud {
    * lap counter or a bigger minimap tightens the limit on its own instead of
    * silently pushing something off the edge. The sway is subtracted too: the
    * plane has to survive being at full size and fully deflected at once.
+   *
+   * A readout's plane is bigger than its type by the halo's bleed, and that is
+   * deliberately not counted: a soft shadow may run off the edge of the frame
+   * without anyone noticing, and counting it would quietly cost the HUD several
+   * percent of the growth it is allowed at speed.
    */
   private measurePlane(): void {
     const scale = this.plane.scale.x;
     this.plane.scale.setScalar(1);
     this.plane.updateMatrixWorld(true);
 
-    const box = new Box3().setFromObject(this.plane);
+    const box = new Box3();
+    const local = new Box3();
+    this.plane.traverse((object) => {
+      if (!(object instanceof Mesh)) return;
+      object.geometry.computeBoundingBox();
+      local.copy(object.geometry.boundingBox!);
+      if (object instanceof TextMesh) {
+        local.min.x += object.bleed;
+        local.max.x -= object.bleed;
+        local.min.y += object.bleed;
+        local.max.y -= object.bleed;
+      }
+      local.applyMatrix4(object.matrixWorld);
+      box.union(local);
+    });
     this.plane.scale.setScalar(scale);
 
     const reachX = Math.max(Math.abs(box.min.x), Math.abs(box.max.x), 1);

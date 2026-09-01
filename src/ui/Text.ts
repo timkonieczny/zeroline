@@ -119,8 +119,16 @@ export class TextMesh extends Mesh {
   private textureNodeHandle: ReturnType<typeof textureNode> | null = null;
   private canvasTexture: CanvasTexture | null = null;
 
-  /** Rendered width and height in layout pixels. */
+  /** Rendered width and height in layout pixels, excluding the halo's bleed. */
   readonly size = new Vector2();
+  /**
+   * Layout pixels of canvas the halo's blur takes on every side.
+   *
+   * The plane is this much bigger than `size` all round. Anything measuring the
+   * mesh geometry rather than the type — the HUD's scale limit — has to take it
+   * back off, or a soft shadow counts as if it were a glyph.
+   */
+  bleed = 0;
 
   constructor(text: string, style: TextStyle = {}, pixelRatio = 2) {
     const material = new MeshBasicNodeMaterial();
@@ -159,6 +167,7 @@ export class TextMesh extends Mesh {
     // — otherwise turning a halo on would quietly shove every readout inward by
     // half an em, which is exactly what it did the first time.
     this.size.set(rendered.width - rendered.bleed * 2, rendered.height - rendered.bleed * 2);
+    this.bleed = rendered.bleed;
 
     this.geometry.dispose();
     this.geometry = new PlaneGeometry(rendered.width, rendered.height);
@@ -167,7 +176,17 @@ export class TextMesh extends Mesh {
     this.textureNodeHandle = textureNode(rendered.texture, uv());
     // The canvas is white glyphs on transparent; colour and fade come from
     // uniforms so a tint change costs nothing and never re-rasterises.
-    material.colorNode = this.tint.xyz;
+    //
+    // Unless there is a halo, in which case the canvas is no longer a single
+    // colour and the tint has to be modulated by what was rasterised rather
+    // than replacing it: white glyphs take the tint, the black shadow around
+    // them stays black. Taking the tint alone — as this did when the halo
+    // arrived — throws the shadow's colour away and leaves a glow in the
+    // label's own near-white, which is invisible against the sky it exists to
+    // give contrast against. Plain labels keep the cheaper path: sampling the
+    // colour of an unhaloed canvas would drag every antialiased edge toward the
+    // transparent black outside the glyph and fringe the type.
+    material.colorNode = rendered.bleed > 0 ? this.textureNodeHandle.rgb.mul(this.tint.xyz) : this.tint.xyz;
     material.opacityNode = this.textureNodeHandle.a.mul(this.tint.w).mul(this.opacity);
     material.needsUpdate = true;
 
