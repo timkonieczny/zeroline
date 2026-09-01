@@ -13,7 +13,7 @@ import {
   type Texture,
 } from 'three';
 import { WaterMesh } from 'three/addons/objects/WaterMesh.js';
-import { createWaterNormals } from './WaterNormals';
+import { createWaterNormals, waterNormalsTexture } from './WaterNormals';
 import { MeshBasicNodeMaterial, MeshStandardNodeMaterial, PMREMGenerator, type WebGPURenderer } from 'three/webgpu';
 import {
   atan,
@@ -64,7 +64,12 @@ export class Environment {
   private readonly definition: TrackDefinition;
   private environmentMap: Texture | null = null;
 
-  constructor(track: Track) {
+  /**
+   * @param waterNormals Bytes for the sea's normal map, if a worker has
+   *   already generated them. They are half a megabyte of value noise and
+   *   about a sixth of a load.
+   */
+  constructor(track: Track, waterNormals?: Uint8Array) {
     this.definition = track.definition;
     const { sun, sky } = track.definition;
 
@@ -121,7 +126,7 @@ export class Environment {
     // than a downloaded JPEG. It renders its own planar reflection, so the
     // resolution scale is kept low: the water is always far away and always
     // moving, and nobody is going to read its reflection for detail.
-    this.waterNormals = createWaterNormals();
+    this.waterNormals = waterNormals ? waterNormalsTexture(waterNormals) : createWaterNormals();
     this.sea = new WaterMesh(new PlaneGeometry(9000, 9000), {
       resolutionScale: 0.25,
       waterNormals: this.waterNormals,

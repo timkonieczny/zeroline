@@ -57,11 +57,18 @@ export class Track {
   /** What the builder made of each authored corner. Used by the tuning report. */
   readonly corners: readonly CornerInfo[];
 
-  constructor(definition: TrackDefinition) {
+  /**
+   * @param spline Already-resampled centreline, if one is to hand. Resampling
+   *   is the single most expensive thing about loading a circuit, and it is
+   *   pure arithmetic over typed arrays, so it is done in a worker and handed
+   *   in. Everything downstream is unchanged either way: this is the same
+   *   spline, built somewhere else.
+   */
+  constructor(definition: TrackDefinition, spline?: TrackSpline) {
     this.definition = definition;
     const path = buildPath(definition.corners);
     this.corners = path.corners;
-    this.spline = new TrackSpline({
+    this.spline = spline ?? new TrackSpline({
       points: path.points,
       widths: path.widths,
       banks: path.banks,

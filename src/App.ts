@@ -4,6 +4,7 @@ import { Input } from '@/core/Input';
 import { PostFX, QUALITY_PRESETS, type PostFXQuality } from '@/core/PostFX';
 import { MenuStage, type MenuSelection } from '@/menu/MenuStage';
 import { RaceStage } from '@/game/RaceStage';
+import { loadTrack, type LoadedTrack } from '@/track/TrackLoader';
 import { TEAMS, type Team } from '@/data/teams';
 import { Audio } from '@/core/Audio';
 import { AudioDirector } from '@/game/AudioDirector';
@@ -128,7 +129,10 @@ export class App {
     this.menu = new MenuStage(this.pixelRatio(), this.buildSettingRows());
     this.menu.onStart = (selection) => {
       void this.behindCurtain('Building circuit', async () => {
-        this.startRace(selection);
+        // Only the first race pays for this; after that the stage is reused
+        // and `startRace` just restarts it.
+        const loaded = this.race ? undefined : await loadTrack(selection.track);
+        this.startRace(selection, loaded);
         await this.warmPipelines();
       });
     };
@@ -206,7 +210,7 @@ export class App {
     ]);
   }
 
-  private startRace(selection: MenuSelection): void {
+  private startRace(selection: MenuSelection, loaded?: LoadedTrack): void {
     const setup = {
       mode: selection.mode,
       speedClass: selection.speedClass,
@@ -218,7 +222,7 @@ export class App {
 
     if (!this.race) {
       this.onStatus('Building circuit');
-      this.race = new RaceStage(selection.track, this.renderer, setup, this.pixelRatio());
+      this.race = new RaceStage(selection.track, this.renderer, setup, this.pixelRatio(), loaded);
       this.race.resize(window.innerWidth, window.innerHeight, this.pixelRatio());
     } else {
       this.race.restart(setup);

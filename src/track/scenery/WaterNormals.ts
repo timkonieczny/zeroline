@@ -20,6 +20,23 @@ const RELIEF = 3.4;
  * grid across an ocean the size of this one.
  */
 export function createWaterNormals(): DataTexture {
+  return waterNormalsTexture(createWaterNormalsData());
+}
+
+/** Wraps a payload — from here or from a worker — in the texture that uses it. */
+export function waterNormalsTexture(data: Uint8Array): DataTexture {
+  const texture = new DataTexture(data, SIZE, SIZE, RGBAFormat, UnsignedByteType);
+  texture.wrapS = RepeatWrapping;
+  texture.wrapT = RepeatWrapping;
+  texture.magFilter = LinearFilter;
+  texture.minFilter = LinearMipmapLinearFilter;
+  texture.generateMipmaps = true;
+  texture.needsUpdate = true;
+  return texture;
+}
+
+/** The RGBA bytes on their own, so they can be generated off the main thread. */
+export function createWaterNormalsData(): Uint8Array {
   const height = new Float32Array(SIZE * SIZE);
 
   for (let octave = 0; octave < OCTAVES; octave++) {
@@ -55,14 +72,7 @@ export function createWaterNormals(): DataTexture {
     }
   }
 
-  const texture = new DataTexture(data, SIZE, SIZE, RGBAFormat, UnsignedByteType);
-  texture.wrapS = RepeatWrapping;
-  texture.wrapT = RepeatWrapping;
-  texture.magFilter = LinearFilter;
-  texture.minFilter = LinearMipmapLinearFilter;
-  texture.generateMipmaps = true;
-  texture.needsUpdate = true;
-  return texture;
+  return data;
 }
 
 /** A periodic grid of random values, seeded so the map is identical every run. */

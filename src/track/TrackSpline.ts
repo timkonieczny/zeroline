@@ -59,6 +59,18 @@ const _tmp = new Vector3();
  * work. Because a closed loop generally does not return to its starting frame,
  * the residual twist is measured once and distributed evenly around the lap.
  */
+/**
+ * A spline reduced to the arrays it is made of, ready to cross a worker
+ * boundary. Every array is transferable, so handing one over copies nothing.
+ */
+export interface SplineData {
+  length: number;
+  count: number;
+  step: number;
+  /** px, py, pz, tx, ty, tz, ux, uy, uz, width, bank — in that order. */
+  lanes: Float32Array[];
+}
+
 export class TrackSpline {
   /** Total centreline length in metres. */
   readonly length: number;
@@ -79,7 +91,29 @@ export class TrackSpline {
   private readonly widthAt: Float32Array;
   private readonly bankAt: Float32Array;
 
-  constructor(options: TrackSplineOptions) {
+  constructor(options: TrackSplineOptions | SplineData) {
+    if ('lanes' in options) {
+      // Rebuilt from a payload rather than resampled. The arrays are the whole
+      // of the spline's state, so adopting them is the same object by a much
+      // shorter route — which is what lets the resampling happen in a worker.
+      this.length = options.length;
+      this.count = options.count;
+      this.step = options.step;
+      const [px, py, pz, tx, ty, tz, ux, uy, uz, widthAt, bankAt] = options.lanes;
+      this.px = px!;
+      this.py = py!;
+      this.pz = pz!;
+      this.tx = tx!;
+      this.ty = ty!;
+      this.tz = tz!;
+      this.ux = ux!;
+      this.uy = uy!;
+      this.uz = uz!;
+      this.widthAt = widthAt!;
+      this.bankAt = bankAt!;
+      return;
+    }
+
     const { points, widths, banks, spacing = 2 } = options;
     if (points.length < 4) {
       throw new Error('TrackSpline needs at least 4 control points');
@@ -248,6 +282,28 @@ export class TrackSpline {
       uy[i] = up.y;
       uz[i] = up.z;
     }
+  }
+
+  /** Everything this spline is, as transferable arrays. */
+  toData(): SplineData {
+    return {
+      length: this.length,
+      count: this.count,
+      step: this.step,
+      lanes: [
+        this.px,
+        this.py,
+        this.pz,
+        this.tx,
+        this.ty,
+        this.tz,
+        this.ux,
+        this.uy,
+        this.uz,
+        this.widthAt,
+        this.bankAt,
+      ],
+    };
   }
 
   /** Wraps an arc length into [0, length). */

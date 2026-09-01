@@ -24,8 +24,12 @@ import { TEAMS } from '@/data/teams';
 interface Phase {
   name: string;
   ms: number;
-  /** Whether the phase could run in a worker as written. */
-  worker: 'yes' | 'no' | 'partly';
+  /**
+   * Where this phase runs today: `moved` is already in the track worker,
+   * `could` is arithmetic that has not been moved because it is not worth the
+   * boundary yet, and `no` needs the main thread.
+   */
+  worker: 'moved' | 'could' | 'no';
   note: string;
 }
 
@@ -38,25 +42,25 @@ function time<T>(name: string, worker: Phase['worker'], note: string, work: () =
   return result;
 }
 
-const track = time('Track (spline, collision, racing line)', 'yes', 'Pure maths over typed arrays', () =>
+const track = time('Track (path, spline, collision)', 'moved', 'Spline is resampled in the worker and transferred', () =>
   new Track(meridianCoast),
 );
 
-time('TrackMesh (road, kerbs, barriers, tunnels, pads)', 'partly', 'Builds BufferGeometry; arrays transfer, geometry does not', () => {
+time('TrackMesh (road, kerbs, barriers, tunnels, pads)', 'moved', 'Swept in the worker; buffers transferred, materials made here', () => {
   return new TrackMesh(track);
 });
 
-time('Skyline (placement, clearance, platforms, bridges)', 'partly', 'Placement is maths; the InstancedMesh is not', () => new Skyline(track));
+time('Skyline (placement, clearance, platforms, bridges)', 'could', 'Placement is maths; the InstancedMesh is not', () => new Skyline(track));
 
-time('SkyHighway', 'partly', 'Lane maths is trivial; the mesh is not', () => new SkyHighway(track));
+time('SkyHighway', 'could', 'Lane maths is trivial; the mesh is not', () => new SkyHighway(track));
 
-time('TunnelLights', 'yes', 'A list of positions', () => new TunnelLights(track));
+time('TunnelLights', 'could', 'A list of positions', () => new TunnelLights(track));
 
-time('Craft models (five teams)', 'partly', 'Sweeps are maths; geometry is not', () => {
+time('Craft models (five teams)', 'could', 'Sweeps are maths; also built for the showroom', () => {
   return TEAMS.map((team) => new GliderModel(team));
 });
 
-time('Water normal map', 'yes', 'Generates a DataTexture payload', () => createWaterNormals());
+time('Water normal map', 'moved', 'Bytes generated in the worker, wrapped in a texture here', () => createWaterNormals());
 
 const total = phases.reduce((sum, phase) => sum + phase.ms, 0);
 
@@ -64,7 +68,7 @@ const pad = (text: string, width: number): string => text.padEnd(width);
 const width = Math.max(...phases.map((phase) => phase.name.length));
 
 console.log('');
-console.log(`${pad('phase', width)}     ms    share  worker`);
+console.log(`${pad('phase', width)}     ms    share  thread`);
 console.log('-'.repeat(width + 34));
 for (const phase of phases.sort((a, b) => b.ms - a.ms)) {
   console.log(
@@ -73,6 +77,9 @@ for (const phase of phases.sort((a, b) => b.ms - a.ms)) {
 }
 console.log('-'.repeat(width + 34));
 console.log(`${pad('total', width)} ${total.toFixed(1).padStart(6)}`);
+console.log('');
+const moved = phases.filter((phase) => phase.worker === 'moved').reduce((sum, phase) => sum + phase.ms, 0);
+console.log(`Off the main thread: ${moved.toFixed(1)} ms of ${total.toFixed(1)} (${((moved / total) * 100).toFixed(0)}%).`);
 console.log('');
 console.log('Not measured here, because it needs a GPU and cannot leave the main thread:');
 console.log('  - PMREM pre-filtering of the sky panorama');

@@ -70,6 +70,13 @@ tests/       Vitest suites for the simulation
 
 ### The pieces that matter
 
+- **`track/TrackWorker.ts`** — a circuit's arithmetic, off the main thread. Resampling the
+  centreline and sweeping the road, barriers and tunnels along it is four fifths of a load and
+  touches no GPU, so it happens in a worker and comes back as transferable buffers.
+  `TrackGeometry.ts` exists to keep `three/webgpu` out of that worker: materials compile shaders
+  and shaders need a device, so the sweeps live in a module that cannot import one. `TrackLoader`
+  falls back to building inline if a worker is unavailable — the fallback is the original path,
+  not a degraded one.
 - **`track/TrackPath.ts`** — a circuit is a closed polygon of corners, each with a radius. The
   road runs straight between them and arcs through each one, so the lap closes by construction.
   Earlier revisions used a numerical closure solve; it worked and produced garbage circuits.

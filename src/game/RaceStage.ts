@@ -1,5 +1,6 @@
 import { Quaternion, Scene, Vector3 } from 'three';
 import { Track } from '@/track/Track';
+import type { LoadedTrack } from '@/track/TrackLoader';
 import { TrackMesh } from '@/track/TrackMesh';
 import { Environment } from '@/track/scenery/Environment';
 import { TunnelLights } from '@/track/scenery/TunnelLights';
@@ -55,13 +56,24 @@ export class RaceStage {
   private readonly ordnance = new WeaponVisuals();
   private readonly models = new Map<Craft, GliderModel>();
 
-  constructor(definition: TrackDefinition, renderer: Renderer, setup: Omit<RaceSetup, 'track'>, pixelRatio: number) {
-    this.track = new Track(definition);
+  /**
+   * @param loaded The circuit's arithmetic, already done — usually in a worker.
+   *   Everything from here on is materials, meshes and scene graph, which is
+   *   main-thread work by definition.
+   */
+  constructor(
+    definition: TrackDefinition,
+    renderer: Renderer,
+    setup: Omit<RaceSetup, 'track'>,
+    pixelRatio: number,
+    loaded?: LoadedTrack,
+  ) {
+    this.track = loaded?.track ?? new Track(definition);
 
-    this.trackMesh = new TrackMesh(this.track);
+    this.trackMesh = new TrackMesh(this.track, loaded?.geometry);
     this.scene.add(this.trackMesh.group);
 
-    this.environment = new Environment(this.track);
+    this.environment = new Environment(this.track, loaded?.waterNormals);
     this.environment.applyTo(this.scene, renderer.renderer);
 
     this.skyline = new Skyline(this.track);
