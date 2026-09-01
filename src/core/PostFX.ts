@@ -9,12 +9,14 @@ import {
 } from 'three/webgpu';
 import {
   convertToTexture,
+  dot,
   float,
   mix,
   mrt,
   output,
   pass,
   renderOutput,
+  smoothstep,
   uniform,
   vec2,
   vec3,
@@ -115,6 +117,20 @@ const GTAO_SCALE = 0.5;
  * read to fix something the sample count fixes directly.
  */
 const GTAO_SAMPLES = 32;
+/**
+ * Depth difference, in metres, past which a sample is thrown away.
+ *
+ * This is the setting that decides whether a wide radius does anything at all.
+ * The node gates every sample on `abs(viewDelta.z) < thickness`, so at its
+ * default of one metre a fourteen-metre radius spends thirty-two samples a
+ * pixel and discards every one that reached anywhere interesting — the effect
+ * collapses back to the hairline of contact shading a two-metre radius gives,
+ * at seven times the cost.
+ *
+ * Six, not fourteen: the gate is also what stops a silhouette occluding the
+ * background behind it, and matching it to the radius brings the halos back.
+ */
+const GTAO_THICKNESS = 6;
 
 const BLUR_SCALE_MAX = 1.6;
 
@@ -152,6 +168,8 @@ export class PostFX {
    * the road rather than as an artefact of the lens.
    */
   private readonly flareStrength = uniform(0.32);
+  /** Kept so it can be disposed: the node owns a render target and a material. */
+  private aoNode: ReturnType<typeof ao> | null = null;
   /** How much of the occlusion term is applied. */
   private readonly aoStrength = uniform(0.62);
   /** Scene exposure, eased by `setDrive` to stand in for the eye adapting. */
@@ -208,9 +226,11 @@ export class PostFX {
       // decision being made by a `.d.ts`.
       const withoutNormals = null as unknown as Parameters<typeof ao>[1];
       const occlusion = ao(depthTexture, withoutNormals, camera);
+      this.aoNode = occlusion;
       occlusion.resolutionScale = GTAO_SCALE;
       occlusion.radius.value = GTAO_RADIUS;
       occlusion.samples.value = GTAO_SAMPLES;
+      occlusion.thickness.value = GTAO_THICKNESS;
 
       // Mixed toward 1 rather than multiplied outright. Occlusion belongs on
       // indirect light, and a post pass has only the finished colour, so a raw
@@ -218,7 +238,18 @@ export class PostFX {
       // dirt rather than as shade. The scene's indirect is one hemisphere fill,
       // so a partial term is a fair approximation of darkening that and leaving
       // the sun alone.
-      node = asColour(node.mul(mix(float(1), occlusion.getTextureNode().r, this.aoStrength)));
+      //
+      // And it is faded out entirely for anything bright enough to be a light.
+      // A tunnel's ceiling strips, a speed pad's chevrons and a craft's exhaust
+      // all sit in exactly the geometry a depth-only pass calls occluded, and
+      // this runs before bloom — so without the guard the occlusion would not
+      // just dim them, it would move them across the bloom threshold and change
+      // how much they glow. Nothing that is a light source gets shaded.
+      const luminance = dot(node.rgb, vec3(0.2126, 0.7152, 0.0722));
+      const lit = smoothstep(float(1), float(BLOOM_THRESHOLD), luminance).oneMinus();
+      node = asColour(
+        node.mul(mix(float(1), occlusion.getTextureNode().r, this.aoStrength.mul(lit))),
+      );
     }
 
     // Exposure goes here: after the antialiasing, which both branches feed from
@@ -376,6 +407,10 @@ export class PostFX {
   }
 
   dispose(): void {
+    // `RenderPipeline.dispose` is one line and never walks the node graph, so
+    // anything in the chain holding a render target has to be released here.
+    // GTAO's is the largest of them.
+    this.aoNode?.dispose();
     this.post.dispose();
   }
 }

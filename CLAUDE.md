@@ -157,9 +157,12 @@ budget is tight:
 
 - The ocean (`WaterMesh`) renders its own planar reflection at 0.25 scale.
 - The showroom floor's mirror renders at 0.5 scale — menu only.
-- GTAO runs its own half-resolution pass at high and ultra. It reconstructs
-  normals from depth rather than adding a third MRT attachment, because on an
-  integrated GPU the bandwidth of that attachment costs more than the maths.
+
+GTAO is *not* one of these, though it is easy to assume so: it runs a half
+resolution full-screen pass off the depth buffer that is already there, and
+never re-renders the scene. It reconstructs normals from depth rather than
+adding a third MRT attachment, because on an integrated GPU that attachment's
+bandwidth costs more than the maths does.
 
 ## Conventions
 
