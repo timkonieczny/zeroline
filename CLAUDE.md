@@ -115,7 +115,12 @@ Both were found by measurement, and both would be easy to reintroduce:
   generator, not a pattern. Quantise with `floor` to the feature you want — a window, a tile —
   and hash that. The building facades were television static for two commits because of this.
 - **A white subject on a white set has no silhouette.** The showroom needs a graded backdrop and a
-  floor a few stops under the ceiling, or the craft dissolves into the room.
+  floor a few stops under the ceiling, or the craft dissolves into the room. When something looks
+  transparent here, check the contrast before checking the material — twice now it has been the
+  set, not a bug.
+- **Airbrakes cannot hold a stationary craft.** Their drag is proportional to speed, so at zero
+  speed they do nothing. Anything that has to stay put — the grid during a countdown — needs its
+  thrust zeroed outright.
 
 ## Interface
 
@@ -130,6 +135,15 @@ Both were found by measurement, and both would be easy to reintroduce:
   on white, which is decoration rather than legibility.
 - **Text is rasterised once per string.** `TextMesh.setText` is free when the string has not
   changed, which is why per-frame readouts are cheap.
+
+## Things that render the scene more than once
+
+Each of these costs a full extra scene render per frame, at a reduced
+resolution. They are worth it, but they are the first place to look if the frame
+budget is tight:
+
+- The ocean (`WaterMesh`) renders its own planar reflection at 0.25 scale.
+- The showroom floor's mirror renders at 0.5 scale — menu only.
 
 ## Conventions
 

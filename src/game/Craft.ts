@@ -163,6 +163,15 @@ export class Craft {
   lastLapAt = 0;
   /** True once the craft has crossed the start line for the first time. */
   hasStartedLap = false;
+  /**
+   * Race time at which the throttle was last opened, or null if it is shut.
+   *
+   * Negative during the countdown, which is exactly what the standing-start
+   * bonus is measured from.
+   */
+  throttleOpenedAt: number | null = null;
+  /** Quality of the getaway, 0..1, or null if there was no bonus. */
+  startRating: number | null = null;
   /** The weapon currently held, or null. */
   weapon: HeldWeapon | null = null;
   /** Seconds until this craft can collect another weapon. */

@@ -267,4 +267,6 @@ export function placeOnGrid(craft: Craft, track: Track, slot: number): void {
   craft.bestLap = null;
   craft.lastLapAt = 0;
   craft.hasStartedLap = false;
+  craft.throttleOpenedAt = null;
+  craft.startRating = null;
 }

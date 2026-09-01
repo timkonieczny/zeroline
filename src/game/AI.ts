@@ -135,11 +135,15 @@ export class Driver {
       input.thrust = 0.35;
     }
 
-    // Race start: hold station until the lights go out.
+    // The countdown: sit on the brakes, then bring the throttle up shortly
+    // before the lights so the field earns its own getaway bonus. A sharper
+    // driver times it later and gets more of it.
     if (raceTime < 0) {
-      input.thrust = 0;
+      const opensAt = -lerp(0.62, 0.12, this.skill.pace);
+      input.thrust = raceTime >= opensAt ? 1 : 0;
       input.brakeLeft = 1;
       input.brakeRight = 1;
+      input.steer = 0;
     }
   }
 

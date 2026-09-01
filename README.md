@@ -38,6 +38,10 @@ path and none is planned.
 
 Airbrakes are the whole game. Steering alone will not get a fast craft through T6.
 
+Open the throttle in the last moment of the countdown for a **getaway bonus** — the later you
+time it inside the window, the bigger the boost. Too early and you get nothing, so it is worth
+watching the lights rather than mashing the button.
+
 ## The circuit
 
 **MERIDIAN COAST — CIRCUIT 01.** 3.25 km, nine corners, 34 m of elevation. Off the start/finish

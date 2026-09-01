@@ -15,6 +15,8 @@ const WINDOWS_ACROSS = 7;
 const WINDOWS_UP = 16;
 /** A window is lit when its hash lands above this. */
 const LIT_FRACTION = 0.72;
+/** Fraction of the skyline clad in glass rather than concrete. */
+const GLASS_FRACTION = 0.5;
 
 interface ThemeRule {
   /** Chance a building is placed at all, per side per stride. */
@@ -140,6 +142,10 @@ export class Skyline {
     const material = new MeshStandardNodeMaterial();
     const seed = instanceIndex.toFloat();
 
+    // One value per building, used to decide what it is clad in.
+    const buildingHash = fract(sin(seed.mul(91.7)).mul(24634.6543));
+    const glass = step(float(1 - GLASS_FRACTION), buildingHash);
+
     const grid = uv().mul(vec3(WINDOWS_ACROSS, WINDOWS_UP, 1).xy);
     const cell = floor(grid);
     const within = fract(grid);
@@ -157,10 +163,23 @@ export class Skyline {
     // Gentle: glass is a little darker than the concrete around it, not a hole.
     // A hard pane-to-wall contrast turns a facade into a checkerboard, which is
     // as wrong as the noise it replaced.
-    material.colorNode = mix(vec3(0.9, 0.91, 0.93), vec3(0.62, 0.67, 0.72), pane.mul(0.8));
-    material.emissiveNode = color(0xfff2dc).mul(lit).mul(0.3);
-    material.roughnessNode = mix(float(0.74), float(0.2), pane);
-    material.metalnessNode = float(0.05);
+    const concrete = mix(vec3(0.9, 0.91, 0.93), vec3(0.62, 0.67, 0.72), pane.mul(0.8));
+
+    // Half the skyline is curtain glass. It reflects the sky rather than the
+    // circuit: a real probe per building is out of the question, and at these
+    // distances the sky is most of what a facade would show anyway.
+    // Light enough to read as glass. At full metalness a facade turned away
+    // from the sky has nothing to reflect and goes almost black, which put a
+    // row of dark slabs through the middle of a bright city.
+    const tint = mix(vec3(0.62, 0.72, 0.8), vec3(0.78, 0.87, 0.93), pane);
+
+    material.colorNode = mix(concrete, tint, glass);
+    // Barely there. Lit windows are a detail on a daylit facade; turned up they
+    // make a shadowed street read as night, which the canyon district does more
+    // than enough of on its own.
+    material.emissiveNode = color(0xfff2dc).mul(lit).mul(mix(float(0.13), float(0.07), glass));
+    material.roughnessNode = mix(mix(float(0.74), float(0.2), pane), mix(float(0.22), float(0.06), pane), glass);
+    material.metalnessNode = mix(float(0.05), float(0.6), glass);
     material.vertexColors = true;
     return material;
   }

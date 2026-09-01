@@ -7,7 +7,7 @@ import { placeOnGrid, respawn, stepCraft } from './Physics';
 import { Driver, skillForGridSlot } from './AI';
 import { copyInputSnapshot, createInputSnapshot, type InputSnapshot } from './InputSnapshot';
 import { Rng } from '@/core/Rng';
-import { wrapDelta } from '@/core/math';
+import { clamp01, lerp, wrapDelta } from '@/core/math';
 import { Vector3 } from 'three';
 import { Projectiles } from './weapons/Projectiles';
 import { rollWeapon, WEAPONS } from './weapons/Weapons';
@@ -35,6 +35,17 @@ const PAD_BOOST = 1.35;
 const PAD_COOLDOWN = 1.5;
 /** Seconds before a craft may collect another weapon. */
 const PICKUP_COOLDOWN = 2.5;
+/**
+ * How long before the lights go out the throttle has to be opened to earn a
+ * getaway. Open it earlier than this and nothing is banked — there is no
+ * penalty, because a standing start is punishing enough on its own.
+ */
+const START_WINDOW = 0.75;
+/** Seconds of boost for the worst and best getaway inside that window. */
+const START_BOOST_MIN = 0.7;
+const START_BOOST_MAX = 2.2;
+/** Throttle position that counts as opened. */
+const THROTTLE_OPEN = 0.5;
 /** Shield fraction below which the AI cashes a weapon in for energy. */
 const AI_ABSORB_THRESHOLD = 0.45;
 /** Metres within which the AI will take a shot at the craft ahead. */
@@ -72,6 +83,8 @@ export class Race {
   /** Distance from each craft's grid slot to the start line, in metres. */
   private readonly startOffsets = new Map<Craft, number>();
   private readonly aiInput: InputSnapshot = createInputSnapshot();
+  /** What a craft is actually fed while the lights are still on. */
+  private readonly gridInput: InputSnapshot = createInputSnapshot();
   private readonly rng: Rng;
 
   constructor(setup: RaceSetup) {
@@ -124,7 +137,8 @@ export class Race {
   /** Advances the whole race by one fixed tick. */
   tick(playerInput: InputSnapshot, dt: number): void {
     this.time += dt;
-    if (this.phase === 'countdown' && this.time >= 0) this.phase = 'racing';
+    const justStarted = this.phase === 'countdown' && this.time >= 0;
+    if (justStarted) this.phase = 'racing';
 
     for (const craft of this.craft) {
       craft.beginTick();
@@ -132,19 +146,28 @@ export class Race {
       let input: InputSnapshot;
       if (craft.control === 'player' && craft.state.autopilot <= 0) {
         input = playerInput;
-        if (this.phase === 'countdown') {
-          // Hold on the grid, but let the player pre-load the throttle.
-          copyInputSnapshot(playerInput, this.aiInput);
-          this.aiInput.brakeLeft = 1;
-          this.aiInput.brakeRight = 1;
-          input = this.aiInput;
-        }
       } else {
         // AI craft, and any craft under autopilot, drive themselves.
         const driver = this.drivers.get(craft) ?? this.autopilotFor(craft);
         driver.update(this.aiInput, dt, this.craft, this.time);
         this.aiWeaponIntent(craft, this.aiInput);
         input = this.aiInput;
+      }
+
+      if (this.phase === 'countdown') {
+        this.watchGetaway(craft, playerInput);
+        // The intent has been recorded; now nothing on the grid actually moves.
+        // Holding both airbrakes does not achieve that on its own, because
+        // their drag is proportional to a speed that is still zero — an earlier
+        // version did exactly that and the whole field crept off the line.
+        copyInputSnapshot(input, this.gridInput);
+        this.gridInput.thrust = 0;
+        this.gridInput.steer = 0;
+        this.gridInput.brakeLeft = 1;
+        this.gridInput.brakeRight = 1;
+        this.gridInput.sideshift = 0;
+        this.gridInput.barrelRoll = 0;
+        input = this.gridInput;
       }
 
       stepCraft(craft, input, this.track, dt);
@@ -156,11 +179,45 @@ export class Race {
       this.trackProgress(craft);
     }
 
+    if (justStarted) this.awardGetaways();
+
     this.projectiles.update(dt, this.craft);
     this.resolveContacts();
     this.updateStandings();
 
     if (this.phase === 'racing' && this.player.finishTime !== null) this.phase = 'finished';
+  }
+
+  /**
+   * Notes when a craft opens its throttle during the countdown.
+   *
+   * Only the moment the throttle was *opened* matters, so releasing and
+   * re-applying resets the clock and a player cannot simply hold it down from
+   * the first light and collect the bonus anyway.
+   */
+  private watchGetaway(craft: Craft, playerInput: InputSnapshot): void {
+    const thrust = craft.control === 'player' ? playerInput.thrust : this.aiInput.thrust;
+    if (thrust >= THROTTLE_OPEN) {
+      if (craft.throttleOpenedAt === null) craft.throttleOpenedAt = this.time;
+    } else {
+      craft.throttleOpenedAt = null;
+    }
+  }
+
+  /**
+   * Pays out the standing start.
+   *
+   * The later inside the window the throttle came up, the better the getaway —
+   * which rewards timing the lights rather than reacting to them.
+   */
+  private awardGetaways(): void {
+    for (const craft of this.craft) {
+      const openedAt = craft.throttleOpenedAt;
+      if (openedAt === null || openedAt < -START_WINDOW) continue;
+      const rating = clamp01(1 + openedAt / START_WINDOW);
+      craft.startRating = rating;
+      craft.state.boost = Math.max(craft.state.boost, lerp(START_BOOST_MIN, START_BOOST_MAX, rating));
+    }
   }
 
   /** Lazily builds a driver for a player craft that has picked up an autopilot. */

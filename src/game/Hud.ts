@@ -22,6 +22,8 @@ const SCRIM_STRENGTH = 0.6;
  * arrives. The table is the detail; the placard is the answer.
  */
 const PLACARD_TIME = 3;
+/** Seconds the getaway verdict stays on screen after the lights. */
+const GETAWAY_TIME = 1.6;
 
 const INK = 0xf2f6fa;
 const DIM = 0x8b97a3;
@@ -83,6 +85,8 @@ export class Hud {
   private shownShield = 1;
   private weaponSlide = 0;
   private centreOpacity = 0;
+  /** Point size the centre message is currently rasterised at. */
+  private centreSize = 100;
 
   private width = 1;
   private height = 1;
@@ -310,17 +314,33 @@ export class Hud {
     let placard = false;
     if (race.phase === 'countdown') {
       const remaining = Math.ceil(race.countdown);
-      message = remaining > 0 ? String(remaining) : 'GO';
+      message = remaining > 0 ? String(remaining) : 'Go';
     } else if (race.finished && this.finishedFor < PLACARD_TIME + 0.4 && !this.tableHidden) {
       message = ordinal(player.position);
       placard = true;
+    } else if (race.time < GETAWAY_TIME && race.player.startRating !== null) {
+      // A good getaway is worth saying out loud, or nobody discovers it exists.
+      message = race.player.startRating > 0.6 ? 'Perfect start' : 'Good start';
     } else if (race.time < 1.2) {
-      message = 'GO';
+      message = 'Go';
     }
     const targetOpacity = message ? 1 : 0;
     this.centreOpacity = lerp(this.centreOpacity, targetOpacity, 1 - Math.exp(-dt * 8));
-    if (message) this.centreMessage.setText(message);
-    this.centreMessage.setColour(placard ? (player.position === 1 ? 0xffd76b : INK) : critical ? WARN : INK, 1);
+    if (message) {
+      // A word needs far less room than a single big numeral. `restyle` throws
+      // away the raster, so it is only called when the size actually changes.
+      const size = message.length > 3 ? 44 : 100;
+      if (size !== this.centreSize) {
+        this.centreSize = size;
+        this.centreMessage.restyle({ size });
+      }
+      this.centreMessage.setText(message);
+    }
+    const getaway = !placard && player.startRating !== null && race.time < GETAWAY_TIME;
+    this.centreMessage.setColour(
+      placard ? (player.position === 1 ? 0xffd76b : INK) : getaway ? 0x6ce8ff : critical ? WARN : INK,
+      1,
+    );
     // The placard is the one thing that must not fade with the racing chrome.
     this.centreMessage.setOpacity(this.centreOpacity * (placard ? 1 : this.raceChrome));
     const pop = 1 + (1 - this.centreOpacity) * 0.25;

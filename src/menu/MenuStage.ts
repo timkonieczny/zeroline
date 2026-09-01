@@ -16,7 +16,24 @@ import {
   type Texture,
 } from 'three';
 import { MeshStandardNodeMaterial, PMREMGenerator, type WebGPURenderer } from 'three/webgpu';
-import { color, float, fract, mix, mul, oneMinus, positionLocal, reflector, smoothstep, time, uv, vec3 } from 'three/tsl';
+import {
+  color,
+  float,
+  fract,
+  mix,
+  mul,
+  normalMap,
+  oneMinus,
+  positionLocal,
+  reflector,
+  smoothstep,
+  texture,
+  time,
+  uv,
+  vec2,
+  vec3,
+} from 'three/tsl';
+import { createFloorSurface } from './FloorSurface';
 import { LIGHT_UI } from '@/ui/Palette';
 import { TextMesh, panelMaterial } from '@/ui/Text';
 import { ListMenu, StatBar } from '@/ui/Widgets';
@@ -44,8 +61,16 @@ const UI = LIGHT_UI;
 
 /** The showroom's walls and haze. */
 const ROOM_WHITE = 0xeef3f7;
-/** How much of the floor is mirror, at the plinth. Falls off with distance. */
-const FLOOR_MIRROR = 0.42;
+/**
+ * How much of the floor is mirror at the plinth, dry and wet. Both fall off
+ * with distance: a mirror running to the horizon reads as a bug.
+ */
+const FLOOR_MIRROR_DRY = 0.3;
+const FLOOR_MIRROR_WET = 0.75;
+/** How many times the floor's surface map repeats across the plane. */
+const FLOOR_TILING = 55;
+/** How much larger the puddles are than the tiles. */
+const PUDDLE_SCALE = 9;
 
 /**
  * Where the plinth stands. Off to the right so the type, which is set flush
@@ -60,19 +85,25 @@ const PLINTH = new Vector3(9, 0, 0);
 const STATIONS: Record<MenuScreen, { position: [number, number, number]; look: [number, number, number]; fov: number }> = {
   // The look targets sit left of the plinth on purpose: aiming straight at it
   // would centre the craft, and the type is set flush left.
-  title: { position: [11, 4.2, 16], look: [-8, 2.4, 0], fov: 38 },
-  main: { position: [8, 3.4, 13], look: [-5.5, 2.2, 0], fov: 42 },
-  track: { position: [7, 6.5, 12], look: [-5.5, 1.8, 0], fov: 44 },
-  // Far enough back that the hull sits in the right third rather than crossing
-  // the stat panel, which it did when this station was framed for a dark room.
-  craft: { position: [4.5, 3.2, 18], look: [-7, 2.3, 0], fov: 30 },
-  class: { position: [5, 3.0, 12], look: [-4.6, 2.3, 0], fov: 38 },
-  controls: { position: [9, 3.6, 14], look: [-5.5, 2.3, 0], fov: 44 },
-  settings: { position: [9, 5.2, 14], look: [-5.5, 2.6, 0], fov: 44 },
+  title: { position: [13, 4.6, 21], look: [-9, 2.4, 0], fov: 32 },
+  main: { position: [10, 3.8, 18], look: [-6.5, 2.2, 0], fov: 34 },
+  track: { position: [9, 7.0, 17], look: [-6.5, 1.8, 0], fov: 36 },
+  craft: { position: [5.5, 3.4, 21], look: [-7.5, 2.3, 0], fov: 27 },
+  class: { position: [7, 3.4, 17], look: [-5.6, 2.3, 0], fov: 32 },
+  controls: { position: [11, 4.0, 19], look: [-6.5, 2.3, 0], fov: 36 },
+  settings: { position: [11, 5.6, 19], look: [-6.5, 2.6, 0], fov: 36 },
 };
 
 const TRACKS: readonly TrackDefinition[] = [meridianCoast];
 
+/** Radians either side of the station the idle orbit swings through. */
+const PAN_ANGLE = 0.085;
+/** Radians per second of that swing. One full cycle takes about half a minute. */
+const PAN_RATE = 0.21;
+/** Metres the camera rises and falls across the swing. */
+const PAN_RISE = 0.16;
+
+const WORLD_UP = new Vector3(0, 1, 0);
 const _from = new Vector3();
 const _to = new Vector3();
 const _stationPosition = new Vector3();
@@ -108,6 +139,8 @@ export class MenuStage {
   private readonly plinth: Group;
   /** Planar reflection of the room, mixed into the floor. */
   private readonly mirror: ReturnType<typeof reflector>;
+  /** Normal map plus puddle mask for the floor. */
+  private readonly floorSurface: Texture;
   /** Image-based lighting probe, so the craft has something to reflect. */
   private environmentMap: Texture | null = null;
   private readonly craftHolder = new Group();
@@ -148,6 +181,8 @@ export class MenuStage {
   private fromStation = STATIONS.title;
   private toStation = STATIONS.title;
   private titlePulse = 0;
+  /** Phase of the idle camera orbit. */
+  private panPhase = 0;
 
   constructor(pixelRatio: number, private readonly settingRows: readonly OptionRow[] = []) {
     this.pixelRatio = pixelRatio;
@@ -171,7 +206,8 @@ export class MenuStage {
     this.mirror.target.rotateX(-Math.PI / 2);
     this.scene.add(this.mirror.target);
 
-    const floor = new Mesh(new PlaneGeometry(400, 400), MenuStage.floorMaterial(this.mirror));
+    this.floorSurface = createFloorSurface();
+    const floor = new Mesh(new PlaneGeometry(400, 400), this.floorMaterial(this.mirror));
     floor.rotation.x = -Math.PI / 2;
     floor.receiveShadow = true;
 
@@ -539,9 +575,11 @@ export class MenuStage {
     this.breadcrumb.position.set(left, top, 0);
     this.hint.position.set(width - MARGIN, MARGIN, 0);
 
-    this.wordmark.position.set(left, height * 0.56, 0);
-    this.tagline.position.set(left + 6, height * 0.56 - 62, 0);
-    this.pressStart.position.set(left + 6, height * 0.56 - 108, 0);
+    // Above the horizon, where the wall is clean. Over the floor the tiles and
+    // puddles compete with the type.
+    this.wordmark.position.set(left, height * 0.74, 0);
+    this.tagline.position.set(left + 6, height * 0.74 - 62, 0);
+    this.pressStart.position.set(left + 6, height * 0.74 - 104, 0);
 
     const listTop = height * 0.66;
     for (const [screen, list] of this.lists) {
@@ -581,11 +619,16 @@ export class MenuStage {
     _to.set(...this.toStation.look);
     _stationLook.copy(_from).lerp(_to, eased).add(PLINTH);
 
-    // A slow drift keeps the frame alive even when nothing is being pressed.
-    const drift = performance.now() * 0.00013;
+    // A very slow orbit around the subject, so the room has depth even when
+    // nothing is being pressed. A sine has no turning point to notice: the
+    // camera is always easing into or out of a direction change, never
+    // arriving at one.
+    this.panPhase += dt * PAN_RATE;
+    const swing = Math.sin(this.panPhase) * PAN_ANGLE;
+    _stationPosition.sub(_stationLook).applyAxisAngle(WORLD_UP, swing).add(_stationLook);
+    _stationPosition.y += Math.sin(this.panPhase * 0.7) * PAN_RISE;
+
     this.camera.position.copy(_stationPosition);
-    this.camera.position.x += Math.sin(drift) * 0.5;
-    this.camera.position.y += Math.cos(drift * 1.3) * 0.22;
     _currentLook.copy(_stationLook);
     this.camera.lookAt(_currentLook);
 
@@ -612,6 +655,7 @@ export class MenuStage {
   }
 
   dispose(): void {
+    this.floorSurface.dispose();
     this.environmentMap?.dispose();
     this.craftModel?.dispose();
     this.settingsList?.dispose();
@@ -628,26 +672,49 @@ export class MenuStage {
    * away with distance from the plinth: a full mirror to the horizon reads as
    * a bug, and a showroom floor is polished, not wet.
    */
-  private static floorMaterial(mirror: ReturnType<typeof reflector>): MeshStandardNodeMaterial {
+  private floorMaterial(mirror: ReturnType<typeof reflector>): MeshStandardNodeMaterial {
     const material = new MeshStandardNodeMaterial();
+    const surface = this.floorSurface;
+
+    // Tiled several times across a 400 m plane, so the tiles are tile-sized.
+    const tiled = uv().mul(FLOOR_TILING);
     const grid = uv().mul(80);
     const lineX = smoothstep(float(0.02), float(0), fract(grid.x).sub(0.5).abs().oneMinus().sub(0.985));
     const lineY = smoothstep(float(0.02), float(0), fract(grid.y).sub(0.5).abs().oneMinus().sub(0.985));
     const radius = uv().sub(0.5).length();
-    const near = smoothstep(float(0.06), float(0.012), radius);
+    const near = smoothstep(float(0.09), float(0.012), radius);
 
-    const base = mix(color(0xd7dfe6), color(0xbcc7d0), lineX.add(lineY).mul(smoothstep(float(0.2), float(0.01), radius)));
-    material.colorNode = mix(base, mirror.rgb, mul(near, float(FLOOR_MIRROR)));
-    material.roughnessNode = float(0.3);
-    material.metalnessNode = float(0.1);
+    // Blue channel of the surface map is the puddle mask: where it is wet the
+    // floor is glass-smooth and mirrors the room, and where it is dry the
+    // normal map's texture takes over. Coupling the two is what sells it —
+    // a uniformly shiny floor reads as plastic, not as a washed garage.
+    // Sampled at a far lower frequency than the tiles. Puddles are metres
+    // across and tiles are not; taking both from the same repeat made the
+    // water repeat every few metres and read as wallpaper.
+    const wet = texture(surface, uv().mul(FLOOR_TILING / PUDDLE_SCALE)).b;
+
+    material.normalNode = normalMap(texture(surface, tiled), vec2(0.7, 0.7));
+
+    const dry = mix(
+      color(0xd9e1e8),
+      color(0xc3ced7),
+      lineX.add(lineY).mul(smoothstep(float(0.2), float(0.01), radius)),
+    );
+    const base = mix(dry, color(0x9fb0bd), wet.mul(0.5));
+    const mirrorAmount = mul(near, mix(float(FLOOR_MIRROR_DRY), float(FLOOR_MIRROR_WET), wet));
+    material.colorNode = mix(base, mirror.rgb, mirrorAmount);
+    material.roughnessNode = mix(float(0.42), float(0.04), wet);
+    material.metalnessNode = float(0.12);
     return material;
   }
 
   private static plinthMaterial(): MeshStandardNodeMaterial {
     const material = new MeshStandardNodeMaterial();
-    material.colorNode = color(0xaeb9c3);
-    material.roughnessNode = float(0.22);
-    material.metalnessNode = float(0.45);
+    // Polished enough to hold the strip lights and a smear of the craft above
+    // it, via the studio probe.
+    material.colorNode = color(0xb6c1cb);
+    material.roughnessNode = float(0.08);
+    material.metalnessNode = float(0.85);
     return material;
   }
 
@@ -681,13 +748,13 @@ export class MenuStage {
     material.emissiveNode = color(0xffffff).mul(smoothstep(float(0), float(0.45), across)).mul(3.2);
     material.fog = false;
 
-    for (let i = 0; i < 5; i++) {
-      for (const side of [-1, 1]) {
-        const panel = new Mesh(new PlaneGeometry(2.6, 15), material);
-        panel.position.set(PLINTH.x + side * 9, 12.5, 4 - i * 11);
-        panel.rotation.x = Math.PI / 2;
-        group.add(panel);
-      }
+    // One continuous run per side. Five separate panels at a grazing angle
+    // overlapped into a dashed, stepped mess that read as z-fighting.
+    for (const side of [-1, 1]) {
+      const panel = new Mesh(new PlaneGeometry(2.4, 108), material);
+      panel.position.set(PLINTH.x + side * 9.5, 12.5, -34);
+      panel.rotation.x = Math.PI / 2;
+      group.add(panel);
     }
     return group;
   }
@@ -714,6 +781,15 @@ export class MenuStage {
       panel.position.set(Math.cos(angle) * 20, 14, Math.sin(angle) * 20);
       panel.lookAt(0, 2, 0);
       studio.add(panel);
+    }
+
+    // The two overhead runs, so anything glossy carries them as long streaks
+    // rather than as four anonymous blobs.
+    for (const side of [-1, 1]) {
+      const strip = new Mesh(new PlaneGeometry(2.4, 90), boxMaterial);
+      strip.position.set(side * 9.5, 12.5, 0);
+      strip.rotation.x = Math.PI / 2;
+      studio.add(strip);
     }
 
     const pmrem = new PMREMGenerator(renderer);

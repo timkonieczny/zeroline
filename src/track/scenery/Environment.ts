@@ -12,8 +12,10 @@ import {
   Vector3,
   type Texture,
 } from 'three';
+import { WaterMesh } from 'three/addons/objects/WaterMesh.js';
+import { createWaterNormals } from './WaterNormals';
 import { MeshStandardNodeMaterial, PMREMGenerator, type WebGPURenderer } from 'three/webgpu';
-import { color, float, mix, normalize, positionLocal, pow, smoothstep, uv, vec3 } from 'three/tsl';
+import { color, float, mix, normalize, positionLocal, pow, smoothstep, vec3 } from 'three/tsl';
 import type { TrackDefinition } from '../TrackTypes';
 import type { Track } from '../Track';
 
@@ -43,7 +45,8 @@ export class Environment {
   readonly sun: DirectionalLight;
   readonly ambient: HemisphereLight;
   readonly sky: Mesh;
-  readonly sea: Mesh;
+  readonly sea: WaterMesh;
+  private readonly waterNormals: Texture;
 
   private readonly definition: TrackDefinition;
   private environmentMap: Texture | null = null;
@@ -81,13 +84,26 @@ export class Environment {
     // taken literally it puts a blue cast on every white surface in the world,
     // and the circuit stops reading as white concrete.
     const fill = new Color(sky.zenith).lerp(new Color(0xffffff), 0.55);
-    this.ambient = new HemisphereLight(fill, new Color(sky.ground), 0.8);
+    this.ambient = new HemisphereLight(fill, new Color(sky.ground), 1.0);
 
     this.sky = new Mesh(new SphereGeometry(SKY_RADIUS, 32, 20), Environment.skyMaterial(track.definition));
     this.sky.name = 'sky';
     this.sky.frustumCulled = false;
 
-    this.sea = new Mesh(new PlaneGeometry(9000, 9000, 1, 1), Environment.seaMaterial(track.definition));
+    // Three's own ocean shader, fed a normal map generated at load rather
+    // than a downloaded JPEG. It renders its own planar reflection, so the
+    // resolution scale is kept low: the water is always far away and always
+    // moving, and nobody is going to read its reflection for detail.
+    this.waterNormals = createWaterNormals();
+    this.sea = new WaterMesh(new PlaneGeometry(9000, 9000), {
+      resolutionScale: 0.25,
+      waterNormals: this.waterNormals,
+      sunDirection: _sunDirection.clone(),
+      sunColor: sun.colour,
+      waterColor: 0x0d5f86,
+      distortionScale: 6,
+      size: 3.2,
+    });
     this.sea.rotation.x = -Math.PI / 2;
     this.sea.position.y = SEA_LEVEL;
     this.sea.receiveShadow = false;
@@ -144,6 +160,7 @@ export class Environment {
 
   dispose(): void {
     this.environmentMap?.dispose();
+    this.waterNormals.dispose();
     this.sky.geometry.dispose();
     this.sea.geometry.dispose();
     (this.sky.material as { dispose(): void }).dispose();
@@ -172,17 +189,4 @@ export class Environment {
     return material;
   }
 
-  /** Flat, bright, faintly banded water. It only ever appears in the distance. */
-  private static seaMaterial(definition: TrackDefinition): MeshStandardNodeMaterial {
-    const material = new MeshStandardNodeMaterial();
-    const distance = uv().sub(0.5).length().mul(2);
-    const deep = color(0x1d7fa8);
-    const far = color(definition.sky.horizon).mul(0.86);
-    material.colorNode = mix(deep, far, smoothstep(float(0.03), float(0.5), distance));
-    // Kept non-metallic on purpose: there is no environment map to reflect, and
-    // a metal without one renders as a black hole where the sea should be.
-    material.roughnessNode = float(0.2);
-    material.metalnessNode = float(0.0);
-    return material;
-  }
 }
