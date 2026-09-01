@@ -1,13 +1,13 @@
-import { Color, Group, Mesh, OrthographicCamera, PlaneGeometry, Scene } from 'three';
+import { Box3, Color, Group, Mesh, OrthographicCamera, PlaneGeometry, Scene, Vector3 } from 'three';
 import { MeshBasicNodeMaterial } from 'three/webgpu';
-import { float, smoothstep, uniform, uv, vec3 } from 'three/tsl';
+import { float, pow, smoothstep, uniform, uv, vec3 } from 'three/tsl';
 import { TextMesh, panelMaterial } from '@/ui/Text';
 import type { Race } from './Race';
 import { WEAPONS } from './weapons/Weapons';
 import { ResultsTable, formatTime } from './Results';
 import { Minimap } from './Minimap';
 import type { Track } from '@/track/Track';
-import { clamp01, lerp } from '@/core/math';
+import { clamp, clamp01, lerp } from '@/core/math';
 
 /** Layout margin from the screen edge, in pixels. */
 const MARGIN = 46;
@@ -16,19 +16,50 @@ const BAR_WIDTH = 300;
 const BAR_HEIGHT = 9;
 
 /**
- * How much larger the HUD gets at full speed.
+ * Scale of the whole overlay when stopped, and when flat out.
  *
- * Each cluster is anchored to its own corner and scaled about that anchor, so
- * the readouts grow inward and the margin never moves. That is the only reason
- * this is safe: scaling the overlay about the screen centre would run the
- * corners off the edge at anything past about 1.08.
+ * The HUD is one rigid plane: it is laid out once, then scaled and shifted as a
+ * single object. Scaling each cluster about its own corner grew the readouts
+ * without moving the margins, which sounds better than it looks — the layout
+ * changes shape as it grows, and the eye reads that as the interface coming
+ * apart rather than as speed.
+ *
+ * Resting under 1 is what buys the range. A layout that touches all four
+ * margins cannot be scaled about its centre by much before something leaves the
+ * screen, so it sits a little small at a standstill and reaches its natural size
+ * at speed. `maxPlaneScale` then clamps whatever this asks for to what actually
+ * fits the viewport.
  */
-const HUD_SPEED_GROWTH = 0.38;
+const HUD_REST_SCALE = 0.92;
+const HUD_FAST_SCALE = 1.16;
 /** How fast the growth follows the speedometer. Slower than the number itself. */
 const HUD_SCALE_RATE = 5;
 
-/** Peak darkening of the scrims, against the screen edge. */
-const SCRIM_STRENGTH = 0.6;
+/**
+ * Pixels the plane slides at one radian per second of course change, and the
+ * furthest it may ever slide.
+ *
+ * Driven by how the craft's direction of travel is changing rather than by the
+ * stick: a craft can be pointed one way and moving another, and it is the
+ * movement that the eye is bracing against. It also comes free in the vertical,
+ * so cresting a rise pushes the interface up.
+ */
+const HUD_SWAY_GAIN = 26;
+const HUD_SWAY_LIMIT = 34;
+/** How fast the sway follows. Loose enough to feel like weight, not lag. */
+const HUD_SWAY_RATE = 6;
+/** Pixels kept between the plane and the edge of the frame at full scale. */
+const HUD_GUARD = 6;
+
+/**
+ * Peak darkening of the scrims, against the screen edge.
+ *
+ * Raised once the painted sky arrived. The readouts are near-white and the old
+ * backdrop was a gradient that stayed well under them; pale cloud at the top of
+ * frame put the lap counter within a few percent of the type's own value and it
+ * simply disappeared.
+ */
+const SCRIM_STRENGTH = 0.7;
 /**
  * Seconds the finishing position is held on its own before the classification
  * arrives. The table is the detail; the placard is the answer.
@@ -36,6 +67,10 @@ const SCRIM_STRENGTH = 0.6;
 const PLACARD_TIME = 3;
 /** Seconds the getaway verdict stays on screen after the lights. */
 const GETAWAY_TIME = 1.6;
+
+const _heading = new Vector3();
+const _turn = new Vector3();
+const _right = new Vector3();
 
 const INK = 0xf2f6fa;
 const DIM = 0x8b97a3;
@@ -89,13 +124,23 @@ export class Hud {
   /** Drives the shield bar's colour without rebuilding its material. */
   private readonly shieldColour = uniform(new Color(0x24d4ff));
   private readonly weaponPanel: Group;
-  /** One group per screen corner, each scaled about its own anchor. */
-  private readonly cornerTL = new Group();
-  private readonly cornerTR = new Group();
-  private readonly cornerBL = new Group();
-  private readonly cornerBR = new Group();
-  /** Eased HUD scale, driven by the player's fraction of top speed. */
-  private hudScale = 1;
+  /**
+   * Everything that scales and sways as one piece.
+   *
+   * Laid out about its own centre so a uniform scale grows it in place. The
+   * scrims stay outside: they are full-bleed gradients and have to reach the
+   * edges whatever the plane is doing.
+   */
+  private readonly plane = new Group();
+  /** Eased plane scale, driven by the player's fraction of top speed. */
+  private planeScale = HUD_REST_SCALE;
+  /** Largest scale that keeps the whole plane inside the frame. */
+  private maxPlaneScale = 1;
+  /** Eased plane offset in pixels, driven by the craft's change of course. */
+  private readonly sway = new Vector3();
+  /** Last frame's direction of travel, in world space. */
+  private readonly lastHeading = new Vector3();
+  private hasHeading = false;
   private readonly scrimTop: Mesh;
   private readonly scrimBottom: Mesh;
 
@@ -120,7 +165,7 @@ export class Hud {
     this.scene.add(this.results.group);
 
     this.minimap = new Minimap(track, fieldSize);
-    this.cornerTR.add(this.minimap.group);
+    this.plane.add(this.minimap.group);
 
     this.speedValue = new TextMesh('0', { size: 80, tracking: 0.02, align: 'right', italic: true }, pixelRatio);
     this.speedUnit = new TextMesh('km/h', { size: 15, tracking: 0.42, align: 'right' }, pixelRatio);
@@ -160,25 +205,69 @@ export class Hud {
     this.weaponPanel = new Group();
     this.weaponPanel.add(this.weaponName, this.weaponHint);
 
-    this.cornerTL.add(this.lapLabel, this.lapValue);
-    this.cornerTR.add(this.timeValue, this.bestLabel);
-    this.cornerBL.add(this.positionValue, this.positionOf, this.shieldTrack, this.shieldFill);
-    this.cornerBR.add(this.speedValue, this.speedUnit);
-
-    this.root.add(
-      this.scrimTop,
-      this.scrimBottom,
-      this.cornerTL,
-      this.cornerTR,
-      this.cornerBL,
-      this.cornerBR,
+    this.plane.add(
+      this.speedValue,
+      this.speedUnit,
+      this.positionValue,
+      this.positionOf,
+      this.lapLabel,
+      this.lapValue,
+      this.timeValue,
+      this.bestLabel,
+      this.shieldTrack,
+      this.shieldFill,
       this.weaponPanel,
     );
+
+    this.root.add(this.scrimTop, this.scrimBottom, this.plane);
 
     // The placard lives outside the racing chrome. Everything in `root` is
     // hidden wholesale once the flag is out, and the finishing position is the
     // one thing that has to survive that.
     this.scene.add(this.centreMessage);
+  }
+
+  /**
+   * Scales and shifts the whole overlay from how the craft is travelling.
+   *
+   * Two inputs, both about movement rather than intent. Speed sets the size, so
+   * a pad or a turbo swells the interface for as long as it lasts. The change in
+   * the *direction of travel* sets the offset: the plane slides against the turn,
+   * the way a passenger leans against one. Steering would have been the easy
+   * signal and the wrong one — a craft sliding through a corner is pointed
+   * somewhere other than where it is going, and it is where it is going that the
+   * eye braces for. Taking the direction as a world-space vector rather than an
+   * angle means the vertical comes free, so cresting a rise pushes the readouts
+   * up without a second rule for it.
+   */
+  private drivePlane(player: Race['player'], dt: number): void {
+    const pace = clamp01(player.telemetry.speed / player.handling.topSpeed);
+    const target = Math.min(lerp(HUD_REST_SCALE, HUD_FAST_SCALE, pace), this.maxPlaneScale);
+    this.planeScale = lerp(this.planeScale, target, 1 - Math.exp(-dt * HUD_SCALE_RATE));
+    this.plane.scale.setScalar(this.planeScale);
+
+    const velocity = player.state.velocity;
+    const moving = velocity.lengthSq() > 1e-4;
+    _heading.copy(moving ? velocity : player.state.forward).normalize();
+
+    if (this.hasHeading && dt > 0) {
+      // How fast the direction of travel is swinging, in radians per second,
+      // resolved onto the craft's own right and up axes.
+      _turn.copy(_heading).sub(this.lastHeading).divideScalar(dt);
+      _right.copy(player.state.forward).cross(player.state.up).normalize();
+
+      const across = clamp(_turn.dot(_right) * HUD_SWAY_GAIN, -HUD_SWAY_LIMIT, HUD_SWAY_LIMIT);
+      const vertical = clamp(_turn.dot(player.state.up) * HUD_SWAY_GAIN, -HUD_SWAY_LIMIT, HUD_SWAY_LIMIT);
+
+      // Against the turn, not with it.
+      const follow = 1 - Math.exp(-dt * HUD_SWAY_RATE);
+      this.sway.x = lerp(this.sway.x, -across, follow);
+      this.sway.y = lerp(this.sway.y, -vertical, follow);
+    }
+    this.lastHeading.copy(_heading);
+    this.hasHeading = true;
+
+    this.plane.position.set(this.width / 2 + this.sway.x, this.height / 2 + this.sway.y, 0);
   }
 
   /** Sizes the overlay to the viewport, in CSS pixels. */
@@ -212,20 +301,17 @@ export class Hud {
   }
 
   /**
-   * Places the four corner anchors, then every readout relative to its anchor.
+   * Lays the readouts out about the centre of the screen.
    *
-   * Nothing here is positioned in absolute screen coordinates any more. Corner
-   * groups get scaled every frame, and a child at an absolute position would be
-   * dragged across the screen by its own group's scale rather than growing in
-   * place.
+   * Every position here is written the obvious way — distance from an edge —
+   * and then rebased onto the plane's centre, because the plane is scaled as a
+   * whole and a uniform scale only grows a layout in place if the layout is
+   * centred on the origin.
    */
   private layout(): void {
     const { width, height } = this;
-
-    this.cornerTL.position.set(MARGIN, height - MARGIN, 0);
-    this.cornerTR.position.set(width - MARGIN, height - MARGIN, 0);
-    this.cornerBL.position.set(MARGIN, MARGIN, 0);
-    this.cornerBR.position.set(width - MARGIN, MARGIN, 0);
+    /** Screen coordinates to plane-local ones. */
+    const at = (x: number, y: number): [number, number, number] => [x - width / 2, y - height / 2, 0];
 
     const scrimHeight = Math.min(230, height * 0.3);
     this.scrimTop.scale.set(width, scrimHeight, 1);
@@ -234,33 +320,58 @@ export class Hud {
     this.scrimBottom.position.set(width / 2, scrimHeight / 2, 0);
 
     // Bottom right: the speed readout, the single most-watched number.
-    this.speedValue.position.set(0, 62, 0);
-    this.speedUnit.position.set(0, 18, 0);
+    this.speedValue.position.set(...at(width - MARGIN, MARGIN + 62));
+    this.speedUnit.position.set(...at(width - MARGIN, MARGIN + 18));
 
     // Bottom left: position, then the shield bar under it.
-    this.positionValue.position.set(0, 74, 0);
-    this.positionOf.position.set(this.positionValue.size.x - 8, 52, 0);
-    this.shieldTrack.position.set(BAR_WIDTH / 2, 18, 0);
-    this.shieldFill.position.set(0, 18, 0);
+    this.positionValue.position.set(...at(MARGIN, MARGIN + 74));
+    this.positionOf.position.set(...at(MARGIN + this.positionValue.size.x - 8, MARGIN + 52));
+    this.shieldTrack.position.set(...at(MARGIN + BAR_WIDTH / 2, MARGIN + 18));
+    this.shieldFill.position.set(...at(MARGIN, MARGIN + 18));
 
     // Top left: lap counter.
-    this.lapLabel.position.set(0, -6, 0);
-    this.lapValue.position.set(0, -34, 0);
+    this.lapLabel.position.set(...at(MARGIN, height - MARGIN - 6));
+    this.lapValue.position.set(...at(MARGIN, height - MARGIN - 34));
 
     // Top right: race clock, best lap, and the minimap under both.
-    this.timeValue.position.set(0, -12, 0);
-    this.bestLabel.position.set(0, -42, 0);
+    this.timeValue.position.set(...at(width - MARGIN, height - MARGIN - 12));
+    this.bestLabel.position.set(...at(width - MARGIN, height - MARGIN - 42));
     this.minimap.group.position.set(
-      -this.minimap.extent.x / 2,
-      -74 - this.minimap.extent.y / 2,
-      0,
+      ...at(width - MARGIN - this.minimap.extent.x / 2, height - MARGIN - 74 - this.minimap.extent.y / 2),
     );
 
-    this.weaponPanel.position.set(width / 2, MARGIN + 34, 0);
+    this.weaponPanel.position.set(...at(width / 2, MARGIN + 34));
     this.weaponName.position.set(0, 22, 0);
     this.weaponHint.position.set(0, -2, 0);
 
     this.centreMessage.position.set(width / 2, height * 0.56, 0);
+
+    this.plane.position.set(width / 2, height / 2, 0);
+    this.measurePlane();
+  }
+
+  /**
+   * Works out how far the plane may be scaled before it leaves the frame.
+   *
+   * Measured from the geometry rather than assumed from the margin, so a longer
+   * lap counter or a bigger minimap tightens the limit on its own instead of
+   * silently pushing something off the edge. The sway is subtracted too: the
+   * plane has to survive being at full size and fully deflected at once.
+   */
+  private measurePlane(): void {
+    const scale = this.plane.scale.x;
+    this.plane.scale.setScalar(1);
+    this.plane.updateMatrixWorld(true);
+
+    const box = new Box3().setFromObject(this.plane);
+    this.plane.scale.setScalar(scale);
+
+    const reachX = Math.max(Math.abs(box.min.x), Math.abs(box.max.x), 1);
+    const reachY = Math.max(Math.abs(box.min.y), Math.abs(box.max.y), 1);
+    const roomX = this.width / 2 - HUD_GUARD - HUD_SWAY_LIMIT;
+    const roomY = this.height / 2 - HUD_GUARD - HUD_SWAY_LIMIT;
+
+    this.maxPlaneScale = Math.max(HUD_REST_SCALE, Math.min(roomX / reachX, roomY / reachY));
   }
 
   /** Pulls this frame's values off the race and eases the display toward them. */
@@ -271,21 +382,12 @@ export class Hud {
     this.shownSpeed = lerp(this.shownSpeed, targetSpeed, 1 - Math.exp(-dt * 12));
     this.speedValue.setText(this.shownSpeed.toFixed(0));
 
-    // The HUD swells with speed. Measured against the craft's own rated top
-    // speed, so a pad or a turbo pushes the fraction to its ceiling and holds
-    // the readouts at full size for as long as the boost lasts.
-    const pace = clamp01(player.telemetry.speed / player.handling.topSpeed);
-    const targetScale = 1 + pace * HUD_SPEED_GROWTH;
-    this.hudScale = lerp(this.hudScale, targetScale, 1 - Math.exp(-dt * HUD_SCALE_RATE));
-    for (const corner of [this.cornerTL, this.cornerTR, this.cornerBL, this.cornerBR]) {
-      corner.scale.setScalar(this.hudScale);
-    }
-    this.weaponPanel.scale.setScalar(this.hudScale);
+    this.drivePlane(player, dt);
 
     this.shownShield = lerp(this.shownShield, clamp01(player.shieldFraction), 1 - Math.exp(-dt * 9));
     const fillWidth = Math.max(1, BAR_WIDTH * this.shownShield);
     this.shieldFill.scale.x = fillWidth;
-    this.shieldFill.position.x = fillWidth / 2;
+    this.shieldFill.position.x = MARGIN + fillWidth / 2 - this.width / 2;
     // Below a quarter the bar turns red and pulses, because at that point the
     // next clean hit ends the race.
     const critical = this.shownShield < 0.28;
@@ -305,7 +407,7 @@ export class Hud {
     const held = player.weapon;
     const targetSlide = held ? 1 : 0;
     this.weaponSlide = lerp(this.weaponSlide, targetSlide, 1 - Math.exp(-dt * 11));
-    this.weaponPanel.position.y = MARGIN + (34 - (1 - this.weaponSlide) * 46) * this.hudScale;
+    this.weaponPanel.position.y = MARGIN + 34 - (1 - this.weaponSlide) * 46 - this.height / 2;
     if (held) {
       const def = WEAPONS[held.id];
       this.weaponName.setText(def.ammo > 1 ? `${def.name} x${held.ammo}` : def.name);
@@ -432,7 +534,9 @@ export class Hud {
     const material = new MeshBasicNodeMaterial();
     const edgeDistance = fromBottom ? uv().y : uv().y.oneMinus();
     material.colorNode = vec3(0.02, 0.03, 0.04);
-    material.opacityNode = smoothstep(float(0), float(1), edgeDistance).oneMinus().mul(SCRIM_STRENGTH);
+    // Biased toward the edge, so the darkening is concentrated where the type
+    // is rather than smeared halfway down the frame.
+    material.opacityNode = pow(smoothstep(float(0), float(1), edgeDistance).oneMinus(), 1.6).mul(SCRIM_STRENGTH);
     material.transparent = true;
     material.depthTest = false;
     material.depthWrite = false;

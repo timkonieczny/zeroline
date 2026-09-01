@@ -10,6 +10,7 @@ import { AudioDirector } from '@/game/AudioDirector';
 import { loadSettings, saveSettings, type GameSettings } from '@/core/Settings';
 import type { OptionRow } from '@/ui/OptionList';
 import { loadUiFont } from '@/ui/Fonts';
+import { loadSkyTexture } from '@/track/scenery/SkyTexture';
 
 type Mode = 'menu' | 'race';
 
@@ -101,6 +102,11 @@ export class App {
 
     this.onStatus('Loading typeface');
     await loadUiFont();
+
+    // Awaited here rather than lazily on the first race, so the circuit is
+    // never built against a missing sky and then quietly relit afterwards.
+    this.onStatus('Loading sky');
+    await loadSkyTexture().catch(() => null);
 
     this.onStatus('Building front end');
     this.menu = new MenuStage(this.pixelRatio(), this.buildSettingRows());

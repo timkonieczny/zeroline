@@ -18,6 +18,7 @@ import { MeshStandardNodeMaterial, PMREMGenerator, type WebGPURenderer } from 't
 import { color, float, mix, normalize, positionLocal, pow, smoothstep, vec3 } from 'three/tsl';
 import type { TrackDefinition } from '../TrackTypes';
 import type { Track } from '../Track';
+import { skyTexture } from './SkyTexture';
 
 /** Radius of the sky dome. Must sit inside the camera's far plane. */
 const SKY_RADIUS = 4200;
@@ -89,6 +90,10 @@ export class Environment {
     this.sky = new Mesh(new SphereGeometry(SKY_RADIUS, 32, 20), Environment.skyMaterial(track.definition));
     this.sky.name = 'sky';
     this.sky.frustumCulled = false;
+    // The dome is the fallback. When the painted panorama is available it goes
+    // straight into `scene.background`, which is both cheaper and sharper than
+    // texturing a sphere, and the dome stops being drawn.
+    this.sky.visible = skyTexture() === null;
 
     // Three's own ocean shader, fed a normal map generated at load rather
     // than a downloaded JPEG. It renders its own planar reflection, so the
@@ -115,27 +120,47 @@ export class Environment {
   /**
    * Installs the environment into a scene.
    *
-   * The sky dome is pre-filtered into an image-based lighting probe, which is
-   * what stops every glossy surface — canopies, hull metal, the sea — from
-   * rendering as a black hole. Without a probe those materials have nothing to
-   * reflect, and physically the correct answer is "nothing".
+   * The sky is pre-filtered into an image-based lighting probe, which is what
+   * stops every glossy surface — canopies, hull metal, the sea, the glass on the
+   * skyline — from rendering as a black hole. Without a probe those materials
+   * have nothing to reflect, and physically the correct answer is "nothing".
+   *
+   * The probe now comes from the painted panorama rather than from the gradient
+   * dome, so reflections carry cloud shapes instead of a smooth wash. That is
+   * the whole reason the panorama earns its place: a reflection is only worth
+   * having if there is something in it to recognise.
    */
   applyTo(scene: Scene, renderer: WebGPURenderer): void {
     const { sky } = this.definition;
-    scene.background = new Color(sky.horizon);
+    const panorama = skyTexture();
+    const pmrem = new PMREMGenerator(renderer);
+
     scene.fog = new FogExp2(new Color(sky.horizon), sky.fogDensity);
     scene.add(this.group);
 
-    const probeScene = new Scene();
-    const probeSky = new Mesh(this.sky.geometry, this.sky.material);
-    probeScene.add(probeSky);
-    const pmrem = new PMREMGenerator(renderer);
-    this.environmentMap = pmrem.fromScene(probeScene, 0, 1, SKY_RADIUS * 2).texture;
-    pmrem.dispose();
-    probeScene.remove(probeSky);
+    if (panorama) {
+      scene.background = panorama;
+      // The panorama is 8-bit sRGB and the scene pass is linear HDR, so it
+      // arrives dimmer than the sunlit geometry in front of it. Lifting it here
+      // is a display decision, not a lighting one.
+      scene.backgroundIntensity = 1.15;
+      this.environmentMap = pmrem.fromEquirectangular(panorama).texture;
+      // A little stronger than the gradient probe was. That one was turned down
+      // because a smooth blue wash on every white surface reads as a colour
+      // cast; this one has structure, so it reads as a reflection.
+      scene.environmentIntensity = 0.62;
+    } else {
+      scene.background = new Color(sky.horizon);
+      const probeScene = new Scene();
+      const probeSky = new Mesh(this.sky.geometry, this.sky.material);
+      probeScene.add(probeSky);
+      this.environmentMap = pmrem.fromScene(probeScene, 0, 1, SKY_RADIUS * 2).texture;
+      probeScene.remove(probeSky);
+      scene.environmentIntensity = 0.42;
+    }
 
+    pmrem.dispose();
     scene.environment = this.environmentMap;
-    scene.environmentIntensity = 0.42;
   }
 
   /**

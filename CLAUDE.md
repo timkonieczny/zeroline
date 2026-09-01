@@ -39,9 +39,14 @@ weapon and — later — a network peer all go through the same struct. Nothing 
 state and the renderer interpolates (`Craft.sampleRender`). Never read the render alpha inside
 simulation code.
 
-**No binary assets.** Tracks, craft, scenery and UI are all generated from numbers. A new
-constructor is an entry in `data/teams`; a new circuit is a list of corners in `data/tracks`.
-Keep it that way unless there is a reason that survives review.
+**No binary assets, with one exception.** Tracks, craft, scenery and UI are all generated from
+numbers. A new constructor is an entry in `data/teams`; a new circuit is a list of corners in
+`data/tracks`. Keep it that way unless there is a reason that survives review.
+
+The exception is `public/sky/sky-42-2k.png`, a painted equirectangular panorama used as the
+circuit's background and as the source of its lighting probe. It is 8-bit sRGB and carries no sun
+energy — the directional sun is unchanged — but it puts recognisable cloud into every reflection,
+which a gradient cannot. A second such file needs a better argument than this one had.
 
 **Shaders are TSL, not GLSL/WGSL strings.** `three/tsl` node graphs, so they compile for whichever
 backend the browser gives us and stay type-checked.
