@@ -3,7 +3,6 @@ import { Track } from '@/track/Track';
 import { TrackMesh } from '@/track/TrackMesh';
 import { Skyline } from '@/track/scenery/Skyline';
 import { SkyHighway } from '@/track/scenery/SkyHighway';
-import { TunnelLights } from '@/track/scenery/TunnelLights';
 import { GliderModel } from '@/game/GliderModel';
 import { createWaterNormals } from '@/track/scenery/WaterNormals';
 import { meridianCoast } from '@/data/tracks/meridian-coast';
@@ -53,8 +52,6 @@ time('TrackMesh (road, kerbs, barriers, tunnels, pads)', 'moved', 'Swept in the 
 time('Skyline (placement, clearance, platforms, bridges)', 'could', 'Placement is maths; the InstancedMesh is not', () => new Skyline(track));
 
 time('SkyHighway', 'could', 'Lane maths is trivial; the mesh is not', () => new SkyHighway(track));
-
-time('TunnelLights', 'could', 'A list of positions', () => new TunnelLights(track));
 
 time('Craft models (five teams)', 'could', 'Sweeps are maths; also built for the showroom', () => {
   return TEAMS.map((team) => new GliderModel(team));

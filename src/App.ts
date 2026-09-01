@@ -393,7 +393,12 @@ export class App {
         frameTime,
       );
       this.director?.update(frameTime);
-      this.racePost.setDrive(player.telemetry.speedFraction, player.state.boost > 0, frameTime);
+      this.racePost.setDrive(
+        player.telemetry.speedFraction,
+        player.state.boost > 0,
+        frameTime,
+        this.race.track.isInTunnel(player.state.s),
+      );
       this.racePost.render();
 
       // Only leave once the table has actually finished animating away.

@@ -78,6 +78,18 @@ export const QUALITY_PRESETS: Record<QualityLevel, PostFXQuality> = {
  */
 const BLUR_REFERENCE_FRAME = 1 / 60;
 /** Hard cap on the normalising factor, so one long frame cannot smear the world. */
+/**
+ * What the exposure climbs to inside a tunnel.
+ *
+ * Enough to lift the strip lights and the road under them out of the gloom, and
+ * enough that daylight on the way out is well past the bloom threshold. Higher
+ * and the tunnel stops being dark at all, which costs the exit its contrast.
+ */
+const TUNNEL_EXPOSURE = 2.15;
+/** How fast the eye opens up in the dark, and closes again in the light. */
+const ADAPT_TO_DARK = 1.1;
+const ADAPT_TO_LIGHT = 2.4;
+
 const BLUR_SCALE_MAX = 1.6;
 
 /**
@@ -114,6 +126,10 @@ export class PostFX {
    * the road rather than as an artefact of the lens.
    */
   private readonly flareStrength = uniform(0.32);
+  /** Scene exposure, eased by `setDrive` to stand in for the eye adapting. */
+  private readonly exposure = uniform(1);
+  private smoothedExposure = 1;
+
   /** Normalises the velocity buffer against a fixed reference frame time. */
   private readonly blurScale = uniform(1);
   private smoothedBlurScale = 1;
@@ -144,7 +160,12 @@ export class PostFX {
     // through. `asColour` exists purely to keep the pipeline readable.
     const asColour = (value: unknown): Node<'vec4'> => value as Node<'vec4'>;
 
-    let node = asColour(colour);
+    // Exposure first, so everything downstream — bloom especially — sees the
+    // adapted image rather than the raw one. That is the whole mechanism behind
+    // a tunnel exit: the exposure the eye settled on in the dark is far too
+    // much for daylight, so half the frame lands over the bloom threshold for a
+    // second and blows out.
+    let node = asColour(colour.mul(this.exposure));
     if (quality.antialias === 'traa') node = asColour(traa(colour, depthTexture, velocityTexture, camera));
     else if (quality.antialias === 'smaa') node = asColour(smaa(colour));
 
@@ -249,7 +270,15 @@ export class PostFX {
    * ticks faster than the display: an unsmoothed boost flag would make the
    * effects flicker on and off between frames.
    */
-  setDrive(speedFraction: number, boosting: boolean, dt: number): void {
+  /**
+   * @param enclosed True while the camera is inside a tunnel.
+   *
+   * There is no luminance pass behind this and there does not need to be: the
+   * simulation already knows exactly when the player is under cover, which is
+   * both cheaper than measuring the frame and, unlike measuring it,
+   * deterministic — a replay adapts at the same rate as the race it recorded.
+   */
+  setDrive(speedFraction: number, boosting: boolean, dt: number, enclosed = false): void {
     // Keep the smear a fixed shutter rather than a fixed number of frames, and
     // ease it so a single long frame does not produce a visible lurch.
     const target = Math.min(BLUR_SCALE_MAX, BLUR_REFERENCE_FRAME / Math.max(dt, 1e-4));
@@ -262,6 +291,15 @@ export class PostFX {
 
     this.speed.value = this.smoothedSpeed;
     this.boost.value = this.smoothedBoost;
+
+    // Dark adaptation is slow and light adaptation is quick, the way an eye
+    // actually works. Entering a tunnel, the picture lifts over about a second;
+    // leaving one, the world arrives already over-exposed and recovers in
+    // rather less — which is the moment the whole effect exists for.
+    const targetExposure = enclosed ? TUNNEL_EXPOSURE : 1;
+    const adaptRate = enclosed ? ADAPT_TO_DARK : ADAPT_TO_LIGHT;
+    this.smoothedExposure += (targetExposure - this.smoothedExposure) * (1 - Math.exp(-dt * adaptRate));
+    this.exposure.value = this.smoothedExposure;
 
     // Both effects stay at zero until well past half speed, so normal driving
     // is clean and only the top of the range feels dangerous.

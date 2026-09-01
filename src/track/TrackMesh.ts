@@ -274,8 +274,15 @@ export class TrackMesh {
     const gap = smoothstep(float(0.12), float(0.3), fract(along));
     const lights = clamp(runA.add(runB), float(0), float(1)).mul(gap).mul(inside);
 
-    material.colorNode = mix(color(0x1a1f24), color(0x2b3239), around.sub(0.5).abs().mul(2));
-    material.emissiveNode = mix(accent.xyz.mul(0.6), vec3(1, 0.96, 0.9), float(0.7)).mul(lights).mul(5);
+    material.colorNode = mix(color(0x232a30), color(0x353e46), around.sub(0.5).abs().mul(2));
+    // Brighter than they were, because they are now the only thing lighting a
+    // tunnel. Real point lights in here cost the entire scene — a forward
+    // renderer charges every lit fragment for every light, whether it is in the
+    // tunnel or a mile away — so the strips went back to being the whole
+    // effect. What sells the dark instead is the exposure adapting to it, and
+    // an emissive run is exactly what a dark-adapted eye should find too
+    // bright.
+    material.emissiveNode = mix(accent.xyz.mul(0.6), vec3(1, 0.96, 0.9), float(0.7)).mul(lights).mul(9);
     material.roughnessNode = float(0.62);
     // Both sides: the road runs inside the tube, but the tube's outside is
     // visible on approach and from the elevated sections above it.
