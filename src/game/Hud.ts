@@ -1,6 +1,6 @@
 import { Box3, Color, Group, Mesh, OrthographicCamera, PlaneGeometry, Scene, Vector3 } from 'three';
 import { MeshBasicNodeMaterial } from 'three/webgpu';
-import { float, pow, smoothstep, uniform, uv, vec3 } from 'three/tsl';
+import { uniform } from 'three/tsl';
 import { TextMesh, panelMaterial } from '@/ui/Text';
 import type { Race } from './Race';
 import { WEAPONS } from './weapons/Weapons';
@@ -54,15 +54,6 @@ const HUD_SWAY_RATE = 6;
 /** Pixels kept between the plane and the edge of the frame at full scale. */
 const HUD_GUARD = 6;
 
-/**
- * Peak darkening of the scrims, against the screen edge.
- *
- * Raised once the painted sky arrived. The readouts are near-white and the old
- * backdrop was a gradient that stayed well under them; pale cloud at the top of
- * frame put the lap counter within a few percent of the type's own value and it
- * simply disappeared.
- */
-const SCRIM_STRENGTH = 0.72;
 /**
  * Seconds the finishing position is held on its own before the classification
  * arrives. The table is the detail; the placard is the answer.
@@ -142,9 +133,7 @@ export class Hud {
   /**
    * Everything that scales and sways as one piece.
    *
-   * Laid out about its own centre so a uniform scale grows it in place. The
-   * scrims stay outside: they are full-bleed gradients and have to reach the
-   * edges whatever the plane is doing.
+   * Laid out about its own centre so a uniform scale grows it in place.
    */
   private readonly plane = new Group();
   /** Eased plane scale, driven by the player's fraction of top speed. */
@@ -156,8 +145,6 @@ export class Hud {
   /** Last frame's direction of travel, in world space. */
   private readonly lastHeading = new Vector3();
   private hasHeading = false;
-  private readonly scrimTop: Mesh;
-  private readonly scrimBottom: Mesh;
 
   /** Eased readouts, so nothing in the HUD flickers at the sim rate. */
   private shownSpeed = 0;
@@ -188,17 +175,23 @@ export class Hud {
     this.minimap = new Minimap(track, fieldSize);
     this.plane.add(this.minimap.group);
 
-    this.speedValue = new TextMesh('0', { size: 80, tracking: 0.02, align: 'right', italic: true }, pixelRatio);
-    this.speedUnit = new TextMesh('km/h', { size: 15, tracking: 0.42, align: 'right' }, pixelRatio);
-    this.positionValue = new TextMesh('1', { size: 84, tracking: 0.02, align: 'left', italic: true }, pixelRatio);
-    this.positionOf = new TextMesh('/ 8', { size: 17, tracking: 0.3, align: 'left' }, pixelRatio);
-    this.lapLabel = new TextMesh('Lap', { size: 13, tracking: 0.42, align: 'left' }, pixelRatio);
-    this.lapValue = new TextMesh('1 / 3', { size: 26, tracking: 0.14, align: 'left' }, pixelRatio);
-    this.timeValue = new TextMesh('0:00.000', { size: 30, tracking: 0.08, align: 'right' }, pixelRatio);
-    this.bestLabel = new TextMesh('Best --:--.---', { size: 13, tracking: 0.28, align: 'right' }, pixelRatio);
-    this.weaponName = new TextMesh('', { size: 24, tracking: 0.24, align: 'centre', italic: true }, pixelRatio);
-    this.weaponHint = new TextMesh('Space fire · Shift absorb', { size: 11, tracking: 0.3, align: 'centre' }, pixelRatio);
-    this.centreMessage = new TextMesh('', { size: 100, tracking: 0.2, align: 'centre', italic: true }, pixelRatio);
+    // Every readout carries a soft black halo. It replaces the gradients that
+    // used to be laid across the top and bottom of the frame: those darkened a
+    // third of the picture to make a dozen small labels legible, which is a
+    // poor trade on a circuit whose whole subject is a bright sky. A shadow
+    // costs a few pixels around each glyph and nothing anywhere else.
+    const HALO = 0.26;
+    this.speedValue = new TextMesh('0', { size: 80, tracking: 0.02, align: 'right', italic: true, shadow: HALO }, pixelRatio);
+    this.speedUnit = new TextMesh('km/h', { size: 15, tracking: 0.42, align: 'right', shadow: HALO }, pixelRatio);
+    this.positionValue = new TextMesh('1', { size: 84, tracking: 0.02, align: 'left', italic: true, shadow: HALO }, pixelRatio);
+    this.positionOf = new TextMesh('/ 8', { size: 17, tracking: 0.3, align: 'left', shadow: HALO }, pixelRatio);
+    this.lapLabel = new TextMesh('Lap', { size: 13, tracking: 0.42, align: 'left', shadow: HALO }, pixelRatio);
+    this.lapValue = new TextMesh('1 / 3', { size: 26, tracking: 0.14, align: 'left', shadow: HALO }, pixelRatio);
+    this.timeValue = new TextMesh('0:00.000', { size: 30, tracking: 0.08, align: 'right', shadow: HALO }, pixelRatio);
+    this.bestLabel = new TextMesh('Best --:--.---', { size: 13, tracking: 0.28, align: 'right', shadow: HALO }, pixelRatio);
+    this.weaponName = new TextMesh('', { size: 24, tracking: 0.24, align: 'centre', italic: true, shadow: HALO }, pixelRatio);
+    this.weaponHint = new TextMesh('Space fire · Shift absorb', { size: 11, tracking: 0.3, align: 'centre', shadow: HALO }, pixelRatio);
+    this.centreMessage = new TextMesh('', { size: 100, tracking: 0.2, align: 'centre', italic: true, shadow: HALO }, pixelRatio);
 
     this.positionValue.setColour(INK);
     this.positionOf.setColour(DIM);
@@ -226,13 +219,6 @@ export class Hud {
     this.shieldTrack.renderOrder = 8;
     this.shieldFill.renderOrder = 9;
 
-    // Soft gradients top and bottom. The circuit is white concrete under a
-    // bright sun; without these the readouts vanish into the road.
-    this.scrimTop = new Mesh(new PlaneGeometry(1, 1), Hud.scrimMaterial(false));
-    this.scrimBottom = new Mesh(new PlaneGeometry(1, 1), Hud.scrimMaterial(true));
-    this.scrimTop.renderOrder = 0;
-    this.scrimBottom.renderOrder = 0;
-
     this.weaponPanel = new Group();
     this.weaponPanel.add(this.weaponName, this.weaponHint);
 
@@ -250,7 +236,7 @@ export class Hud {
       this.weaponPanel,
     );
 
-    this.root.add(this.scrimTop, this.scrimBottom, this.plane);
+    this.root.add(this.plane);
 
     // The placard lives outside the racing chrome. Everything in `root` is
     // hidden wholesale once the flag is out, and the finishing position is the
@@ -345,12 +331,6 @@ export class Hud {
     const { width, height } = this;
     /** Screen coordinates to plane-local ones. */
     const at = (x: number, y: number): [number, number, number] => [x - width / 2, y - height / 2, 0];
-
-    const scrimHeight = Math.min(230, height * 0.3);
-    this.scrimTop.scale.set(width, scrimHeight, 1);
-    this.scrimTop.position.set(width / 2, height - scrimHeight / 2, 0);
-    this.scrimBottom.scale.set(width, scrimHeight, 1);
-    this.scrimBottom.position.set(width / 2, scrimHeight / 2, 0);
 
     // Bottom right: the speed readout, the single most-watched number.
     this.speedValue.position.set(...at(width - MARGIN, MARGIN + 62));
@@ -462,10 +442,10 @@ export class Hud {
     }
     this.results.update(race, dt, this.width, this.height);
 
-    // Racing readouts fade out under the classification. The bars and scrims
+    // Racing readouts fade out under the classification. The bars
     // are plain meshes with no text opacity, so the whole group is hidden once
     // the fade has run rather than being left at a residual alpha.
-    // The readouts stay up through the placard — the scrims are what give it
+    // The readouts stay up through the placard — their own haloes give them
     // contrast against a bright sky, and a driver who has just crossed the line
     // still wants to see the lap and the speed. They step aside only once the
     // table arrives, and come back if it is tucked away to watch the replay.
@@ -557,28 +537,6 @@ export class Hud {
     this.raceChrome = 1;
     this.finishedFor = 0;
     this.tableHidden = false;
-  }
-
-  /**
-   * A one-sided vertical fade, used behind the readouts.
-   *
-   * `edgeDistance` is 0 against the edge of the screen this scrim hugs and 1 at
-   * its inner side, so the darkening is strongest at the edge and gone by the
-   * inner boundary. Getting this the wrong way round — as an earlier version
-   * did — draws a hard-edged band across the middle of the frame instead.
-   */
-  private static scrimMaterial(fromBottom: boolean): MeshBasicNodeMaterial {
-    const material = new MeshBasicNodeMaterial();
-    const edgeDistance = fromBottom ? uv().y : uv().y.oneMinus();
-    material.colorNode = vec3(0.02, 0.03, 0.04);
-    // Held rather than biased. The readouts sit a third of the way into the
-    // scrim, not against the edge of it, so a curve that falls away quickly is
-    // at its weakest exactly where the type needs it.
-    material.opacityNode = pow(smoothstep(float(0), float(1), edgeDistance).oneMinus(), 0.6).mul(SCRIM_STRENGTH);
-    material.transparent = true;
-    material.depthTest = false;
-    material.depthWrite = false;
-    return material;
   }
 
   dispose(): void {

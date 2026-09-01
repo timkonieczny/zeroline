@@ -160,14 +160,20 @@ export class PostFX {
     // through. `asColour` exists purely to keep the pipeline readable.
     const asColour = (value: unknown): Node<'vec4'> => value as Node<'vec4'>;
 
-    // Exposure first, so everything downstream — bloom especially — sees the
-    // adapted image rather than the raw one. That is the whole mechanism behind
-    // a tunnel exit: the exposure the eye settled on in the dark is far too
-    // much for daylight, so half the frame lands over the bloom threshold for a
-    // second and blows out.
-    let node = asColour(colour.mul(this.exposure));
+    let node = asColour(colour);
     if (quality.antialias === 'traa') node = asColour(traa(colour, depthTexture, velocityTexture, camera));
     else if (quality.antialias === 'smaa') node = asColour(smaa(colour));
+
+    // Exposure goes here: after the antialiasing, which both branches feed from
+    // the raw scene texture, and before everything that reacts to brightness.
+    //
+    // It was above the antialiasing to begin with, which meant SMAA — the
+    // default — overwrote it with the unexposed image and the adaptation never
+    // reached the frame at all. That is the whole mechanism behind a tunnel
+    // exit: the exposure the eye settled on in the dark is far too much for
+    // daylight, so half the frame lands over the bloom threshold for a second
+    // and blows out.
+    node = asColour(node.mul(this.exposure));
 
     // Motion blur runs before bloom, and on a resolved texture. Several of the
     // addon nodes sample their input directly, so anything handed to them has to

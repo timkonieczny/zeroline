@@ -20,6 +20,12 @@ export interface TextStyle {
    * constructor tags, nation codes, the wordmark.
    */
   upper?: boolean;
+  /**
+   * Soft black halo behind the glyphs, as a fraction of the point size.
+   * Zero for anything on a controlled background; a HUD over daylight needs
+   * about a quarter.
+   */
+  shadow?: number;
   /** Italic. The display cut, used for headlines and for anything singled out. */
   italic?: boolean;
   /** Font stack. Defaults to the UI face. */
@@ -42,12 +48,13 @@ export function renderTextTexture(
   value: string,
   style: TextStyle,
   pixelRatio: number,
-): { texture: CanvasTexture; width: number; height: number } {
+): { texture: CanvasTexture; width: number; height: number; bleed: number } {
   const size = style.size ?? 24;
   const weight = style.weight ?? UI_WEIGHT;
   const tracking = style.tracking ?? 0.18;
   const family = style.family ?? DEFAULT_FAMILY;
   const text = style.upper ? value.toUpperCase() : value;
+  const shadow = style.shadow ?? 0;
 
   const canvas = document.createElement('canvas');
   const context = canvas.getContext('2d')!;
@@ -56,8 +63,10 @@ export function renderTextTexture(
   context.font = font;
   context.letterSpacing = `${size * tracking}px`;
   const metrics = context.measureText(text);
-  const width = Math.ceil(metrics.width) + PADDING * 2 + (style.italic ? Math.ceil(size * 0.25) : 0);
-  const height = Math.ceil(size * 1.45) + PADDING * 2;
+  // The blur needs room in the bitmap or it is clipped at the glyph's edge.
+  const bleed = Math.ceil(size * shadow * 2);
+  const width = Math.ceil(metrics.width) + (PADDING + bleed) * 2 + (style.italic ? Math.ceil(size * 0.25) : 0);
+  const height = Math.ceil(size * 1.45) + (PADDING + bleed) * 2;
 
   canvas.width = Math.max(1, Math.ceil(width * pixelRatio));
   canvas.height = Math.max(1, Math.ceil(height * pixelRatio));
@@ -68,7 +77,21 @@ export function renderTextTexture(
   context.textBaseline = 'middle';
   context.textAlign = 'left';
   context.fillStyle = '#ffffff';
-  context.fillText(text, PADDING, height / 2);
+
+  // The glyphs are white and tinted by a uniform, so anything drawn here in
+  // white takes the label's colour and anything drawn in black stays black
+  // whatever that colour is. A black shadow therefore survives the tint, which
+  // is what lets a readout carry its own contrast instead of needing a gradient
+  // laid across the frame behind it.
+  if (shadow > 0) {
+    context.shadowColor = 'rgba(0, 0, 0, 0.9)';
+    context.shadowBlur = size * shadow;
+    // Twice, because one pass of a soft shadow is barely there against a bright
+    // sky and the second costs nothing.
+    context.fillText(text, PADDING + bleed, height / 2);
+  }
+  context.fillText(text, PADDING + bleed, height / 2);
+  context.shadowBlur = 0;
 
   const texture = new CanvasTexture(canvas);
   texture.colorSpace = SRGBColorSpace;
@@ -77,7 +100,7 @@ export function renderTextTexture(
   texture.generateMipmaps = false;
   texture.needsUpdate = true;
 
-  return { texture, width, height };
+  return { texture, width, height, bleed };
 }
 
 /**
@@ -131,7 +154,11 @@ export class TextMesh extends Mesh {
     this.canvasTexture?.dispose();
     const rendered = renderTextTexture(text, this.style, this.pixelRatio);
     this.canvasTexture = rendered.texture;
-    this.size.set(rendered.width, rendered.height);
+    // The reported size excludes the shadow's bleed. The plane still covers it,
+    // so the blur is drawn, but layout and alignment are measured on the glyphs
+    // — otherwise turning a halo on would quietly shove every readout inward by
+    // half an em, which is exactly what it did the first time.
+    this.size.set(rendered.width - rendered.bleed * 2, rendered.height - rendered.bleed * 2);
 
     this.geometry.dispose();
     this.geometry = new PlaneGeometry(rendered.width, rendered.height);
