@@ -125,7 +125,9 @@ canvas#view {
   background: var(--panel);
   border-left: 2px solid var(--accent);
   font: 400 11px/1.55 ui-monospace, 'Cascadia Mono', Consolas, monospace;
-  color: var(--ink);
+  /* White, not the page ink. The panel behind this is dark and it sits over the
+     circuit, so it is the one piece of interface not on a light ground. */
+  color: #f2f6fa;
   white-space: pre;
   pointer-events: none;
   z-index: 10;
