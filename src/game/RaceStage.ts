@@ -16,6 +16,7 @@ import { createInputSnapshot } from './InputSnapshot';
 import type { Craft } from './Craft';
 import type { Renderer } from '@/core/Renderer';
 import { clamp01 } from '@/core/math';
+import { advanceSimTime } from '@/core/Clock';
 
 const _position = new Vector3();
 const _rotation = new Quaternion();
@@ -170,6 +171,9 @@ export class RaceStage {
     camera: Parameters<ChaseCamera['update']>[0],
     uiDt = dt,
   ): void {
+    // The world's own shader clock, so the pads stop scrolling when the race is
+    // held rather than animating on behind the pause panel.
+    advanceSimTime(dt);
     for (const [craft, model] of this.models) {
       craft.sampleRender(alpha, _position, _rotation);
       model.object.position.copy(_position);

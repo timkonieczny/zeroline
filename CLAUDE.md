@@ -16,6 +16,7 @@ npm run lint
 npx vite-node scripts/inspect-track.ts   # circuit geometry report: corners, curvature, gradient
 npx vite-node scripts/hotlap.ts          # headless lap times for every team
 npx vite-node scripts/hotlap.ts kestrel rapier
+npx vite-node scripts/load-profile.ts    # where the load time goes, and what could leave the main thread
 ```
 
 The two scripts are the tuning loop. Change a number in `Handling.ts` or a corner in a track

@@ -9,11 +9,11 @@ import {
   positionLocal,
   sin,
   smoothstep,
-  time,
   uniform,
   uv,
   vec3,
 } from 'three/tsl';
+import { simTime } from '@/core/Clock';
 import type { HullSpec, Team } from '@/data/teams';
 import { clamp01, lerp } from '@/core/math';
 
@@ -450,10 +450,10 @@ export class GliderModel {
 
     // Turbulence scrolling out of the nozzle, plus a faster flicker on top.
     const churn = mx_fractal_noise_float(
-      vec3(uv().x.mul(6), along.mul(3).sub(time.mul(5.5)), time.mul(0.9)),
+      vec3(uv().x.mul(6), along.mul(3).sub(simTime.mul(5.5)), simTime.mul(0.9)),
       3,
     ).mul(0.5).add(0.5);
-    const flicker = sin(time.mul(31).add(along.mul(9))).mul(0.06).add(0.94);
+    const flicker = sin(simTime.mul(31).add(along.mul(9))).mul(0.06).add(0.94);
 
     // Fades out along its length, and the edge of the cone is thinner than its
     // core, which is what keeps it from reading as a painted cardboard shape.

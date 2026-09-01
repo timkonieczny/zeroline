@@ -15,10 +15,10 @@ import {
   sin,
   smoothstep,
   step,
-  time,
   uv,
   vec3,
 } from 'three/tsl';
+import { simTime } from '@/core/Clock';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { buildRibbon, type ProfilePoint } from './TrackRibbon';
 import type { ResolvedPad, Track } from './Track';
@@ -402,7 +402,7 @@ export class TrackMesh {
     const across = uv().x.sub(0.5).abs().mul(2);
     const along = uv().y;
     // A chevron is just a V-shaped offset applied to the scrolling coordinate.
-    const scroll = fract(along.mul(3).sub(time.mul(2.2)).add(across.mul(0.45)));
+    const scroll = fract(along.mul(3).sub(simTime.mul(2.2)).add(across.mul(0.45)));
     const stripe = smoothstep(float(0.5), float(0.18), scroll);
     const inset = smoothstep(float(1.0), float(0.88), across);
     material.colorNode = mix(color(0x0d1418), color(0x0affc8), stripe).mul(inset);
@@ -425,11 +425,11 @@ export class TrackMesh {
     const along = uv().y.sub(0.5).abs().mul(2);
     const frame = max(across, along);
     const ring = smoothstep(float(0.55), float(0.75), frame).mul(smoothstep(float(1.0), float(0.9), frame));
-    const pulse = sin(time.mul(2.4)).mul(0.5).add(0.5).mul(0.4).add(0.6);
+    const pulse = sin(simTime.mul(2.4)).mul(0.5).add(0.5).mul(0.4).add(0.6);
 
     // Cosine palette: three channels of the same wave, a third of a turn apart,
     // which is a full hue sweep in four cheap instructions and no texture.
-    const phase = time.mul(0.28).sub(uv().y.mul(0.4));
+    const phase = simTime.mul(0.28).sub(uv().y.mul(0.4));
     const wheel = vec3(0.5, 0.5, 0.5).add(
       vec3(0.5, 0.5, 0.5).mul(cos(vec3(phase, phase.add(0.33), phase.add(0.67)).mul(Math.PI * 2))),
     );

@@ -4,16 +4,26 @@ import type { Track } from '../Track';
 /**
  * How many lamps exist as actual lights at any moment.
  *
- * A circuit's tunnels hold well over a hundred lamp positions. Six real ones,
- * moved to whichever positions are nearest the camera, is indistinguishable from
- * lighting all of them and costs a fixed six shadowless lights instead of a
- * per-tunnel forward-lighting bill.
+ * A circuit's tunnels hold well over a hundred lamp positions; these are the
+ * ones that are real lights, moved to whichever positions are nearest the
+ * camera.
+ *
+ * Three at once, not six. The cost of a point light in a forward renderer is
+ * not paid where the light is — it is paid by every lit fragment in the scene,
+ * which here means the whole city, the sea and the road whether they are in a
+ * tunnel or a mile away from one. Halving the pool halves that loop for the
+ * entire frame. Range is up and intensity with it, so three lamps cover the
+ * stretch six used to and the tunnel is no darker for it.
+ *
+ * The count is fixed rather than grown and shrunk on demand: a node material's
+ * light count is baked into its shader, so adding a light mid-race would
+ * recompile every material in the scene.
  */
-const POOL = 6;
+const POOL = 3;
 /** Metres of tunnel a single lamp reaches. */
-const RANGE = 46;
+const RANGE = 64;
 /** Peak intensity of one lamp. */
-const INTENSITY = 260;
+const INTENSITY = 460;
 /** Height above the road, in metres. Just under the crown of the arch. */
 const HEIGHT = 12.5;
 const _position = new Vector3();

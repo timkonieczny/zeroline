@@ -32,6 +32,9 @@ const RESULTS_GRACE = 0.8;
  */
 const QUALITY_ORDER: readonly GameSettings['quality'][] = ['low', 'medium', 'high', 'ultra'];
 
+/** How long the loading screen holds while shaders compile, in ms. */
+const PRECOMPILE_HOLD = 900;
+
 /**
  * The menu does not need motion blur or speed streaks; it is not moving fast.
  *
@@ -124,7 +127,10 @@ export class App {
     this.onStatus('Building front end');
     this.menu = new MenuStage(this.pixelRatio(), this.buildSettingRows());
     this.menu.onStart = (selection) => {
-      void this.behindCurtain('Building circuit', () => this.startRace(selection));
+      void this.behindCurtain('Building circuit', async () => {
+        this.startRace(selection);
+        await this.warmPipelines();
+      });
     };
     this.menu.onSettingChanged = (row) => this.onSettingChanged(row);
     this.menu.attachRenderer(this.renderer.renderer);
@@ -166,7 +172,7 @@ export class App {
    * what that costs: one for the class change to take effect and one for the
    * compositor to show it.
    */
-  private async behindCurtain(label: string, work: () => void): Promise<void> {
+  private async behindCurtain(label: string, work: () => void | Promise<void>): Promise<void> {
     this.transitioning = true;
     if (this.curtainStatus) this.curtainStatus.textContent = label;
     this.curtain?.classList.remove('hidden');
@@ -176,7 +182,7 @@ export class App {
     // And a beat longer, so the fade in is seen rather than skipped over.
     await new Promise((resolve) => window.setTimeout(resolve, 260));
 
-    work();
+    await work();
 
     // One more frame so the first frame of the new scene is on screen before
     // the curtain starts to lift, rather than a stale one from behind it.
@@ -239,6 +245,37 @@ export class App {
     if (this.director) this.director.attach(this.race.race);
     else this.director = new AudioDirector(this.audio, this.race.race);
     this.audio.startEngine();
+  }
+
+  /**
+   * Compiles every pipeline the race needs while the curtain is still down.
+   *
+   * This is the part of a load that is not in the profile and is bigger than
+   * all of it: a material's shader is not built until something is drawn with
+   * it, so without this the first seconds of a race compile the road, then the
+   * barriers, then the first craft to come into view, one hitch at a time. It
+   * is also the only piece of the load that has to be on the main thread and
+   * cannot be made to go faster — so the least it can do is happen behind the
+   * curtain, where nobody is watching.
+   *
+   * The post chain's own passes are warmed by rendering one frame through it,
+   * which `compileAsync` on the scene alone does not cover.
+   */
+  private async warmPipelines(): Promise<void> {
+    if (!this.race) return;
+    if (this.curtainStatus) this.curtainStatus.textContent = 'Compiling shaders';
+
+    // Started, not waited on.
+    //
+    // `compileAsync` hands off to the driver and resolves when the driver feels
+    // like it; awaiting that puts the loading screen at the mercy of something
+    // with no upper bound on how long it takes. So the compile is kicked off,
+    // the curtain holds for a fixed moment, and then it lifts whatever has
+    // happened. Anything still uncompiled compiles when it is first drawn,
+    // which is exactly the behaviour this replaces — the difference is that
+    // most of it is already done by then.
+    void this.renderer.renderer.compileAsync(this.race.scene, this.renderer.camera).catch(() => undefined);
+    await new Promise((resolve) => window.setTimeout(resolve, PRECOMPILE_HOLD));
   }
 
   /** Fills the other seven seats, avoiding a grid of identical craft where possible. */
@@ -377,6 +414,7 @@ export class App {
       `${(1 / Math.max(frameTime, 1e-6)).toFixed(0).padStart(3)} fps   ${(frameTime * 1000).toFixed(2)} ms`,
       `mode       ${this.mode}`,
       `backend    ${stats.backend}`,
+      `adapter    ${stats.adapter}`,
       `buffer     ${stats.drawingBufferWidth}x${stats.drawingBufferHeight}`,
       `dpr        ${stats.devicePixelRatio.toFixed(2)}  scale ${stats.resolutionScale.toFixed(2)}`,
       `draws      ${info.render.drawCalls}   tris ${info.render.triangles.toLocaleString()}`,

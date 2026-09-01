@@ -11,6 +11,8 @@ export interface RendererStats {
   resolutionScale: number;
   /** 'webgpu' or 'webgl', whichever the browser gave us. */
   backend: string;
+  /** What the GPU we ended up on calls itself, so the answer is not a guess. */
+  adapter: string;
 }
 
 /** Never render below this fraction of native resolution. */
@@ -46,6 +48,9 @@ export class Renderer {
   private frameTimeSum = 0;
   private frameTimeCount = 0;
 
+  /** What the GPU we ended up on calls itself. Shown on the F3 overlay. */
+  private adapterName = 'unknown';
+
   private currentDpr = 1;
   private dprQuery: MediaQueryList | null = null;
   private readonly onDprChange = (): void => this.watchPixelRatio();
@@ -56,6 +61,9 @@ export class Renderer {
     this.canvas = canvas ?? document.createElement('canvas');
     this.canvas.id = 'view';
 
+    // The device is not created here. `init` asks for the adapter itself and
+    // hands the finished device over, so this constructor only sets what does
+    // not depend on it.
     this.renderer = new WebGPURenderer({
       canvas: this.canvas,
       antialias: false, // Handled in the post chain by TRAA, which is cheaper here.
@@ -73,13 +81,52 @@ export class Renderer {
     this.camera = new PerspectiveCamera(72, 1, 0.35, 6000);
   }
 
-  /** Boots the GPU device. Must be awaited before anything is rendered. */
+  /**
+   * Boots the GPU device. Must be awaited before anything is rendered.
+   *
+   * The adapter is requested here rather than left to three, for one reason:
+   * three asks for `featureLevel: 'compatibility'` alongside the power
+   * preference, and on a laptop with two GPUs a compatibility request is
+   * exactly the kind a driver is happy to satisfy with the integrated one. Ask
+   * plainly for high performance, take the device that comes back, and hand it
+   * over — three uses a supplied device as-is and never calls `requestAdapter`.
+   *
+   * This is a request, not a guarantee. Chrome and Windows still have the final
+   * say, and a laptop on battery will often refuse. `stats.adapter` reports
+   * what was actually handed over, so the answer is visible on F3 rather than
+   * guessed at.
+   */
   async init(): Promise<void> {
+    await this.claimAdapter();
     await this.renderer.init();
     if (!this.canvas.isConnected) document.body.appendChild(this.canvas);
     this.watchPixelRatio();
     window.addEventListener('resize', this.onResize);
     this.applySize();
+  }
+
+  /** Requests a discrete adapter and hands three the device it produces. */
+  private async claimAdapter(): Promise<void> {
+    const gpu = (navigator as unknown as { gpu?: GPU }).gpu;
+    if (!gpu) return;
+
+    try {
+      const adapter = await gpu.requestAdapter({ powerPreference: 'high-performance' });
+      if (!adapter) return;
+
+      const info = adapter.info as GPUAdapterInfo | undefined;
+      this.adapterName = [info?.vendor, info?.architecture, info?.description]
+        .filter((part) => part)
+        .join(' ') || 'unnamed adapter';
+
+      const device = await adapter.requestDevice();
+      (this.renderer as unknown as { backend: { parameters: { device?: GPUDevice } } }).backend.parameters.device =
+        device;
+    } catch {
+      // Whatever went wrong, three's own path is a working fallback: it will
+      // request an adapter itself on `init`.
+      this.adapterName = 'default adapter';
+    }
   }
 
   dispose(): void {
@@ -155,6 +202,7 @@ export class Renderer {
       backend: (this.renderer.backend as { isWebGPUBackend?: boolean } | undefined)?.isWebGPUBackend
         ? 'webgpu'
         : 'webgl',
+      adapter: this.adapterName,
     };
   }
 }
