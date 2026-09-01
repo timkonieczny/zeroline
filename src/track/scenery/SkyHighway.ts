@@ -1,7 +1,6 @@
-import { Group, InstancedMesh, OctahedronGeometry, Vector3 } from 'three';
+import { Color, Group, InstancedMesh, Object3D, OctahedronGeometry, Vector3 } from 'three';
 import { MeshStandardNodeMaterial } from 'three/webgpu';
-import { mrt, output, vec4 } from 'three/tsl';
-import { color, cos, float, fract, instanceIndex, mix, positionLocal, sin, smoothstep, uniform, vec3 } from 'three/tsl';
+import { float, fract, instanceIndex, positionLocal, smoothstep, vec3 } from 'three/tsl';
 import type { Track } from '../Track';
 
 /** Lanes of traffic crossing the sky. */
@@ -26,7 +25,10 @@ export const LANE_HALF_WIDTH = 16;
 /** Vertical air demanded between a lane and anything under it. */
 export const LANE_CLEARANCE = 22;
 
-const _centre = new Vector3();
+const _dummy = new Object3D();
+const _tint = new Color();
+const _hot = new Color(0xff5a4a);
+const _cool = new Color(0x7ad8ff);
 
 /** One lane of sky traffic, as a straight line in the ground plane. */
 export interface SkyLane {
@@ -52,13 +54,12 @@ function trackCentre(track: Track, out: Vector3): Vector3 {
 }
 
 /**
- * Where the traffic lanes run, on the CPU.
+ * Where the traffic lanes run.
  *
- * The shader derives this arithmetically from the instance index; this returns
- * the same lattice so the skyline can be built around it. Lowering the highway
- * to where it is actually visible put it straight through the tops of the tall
- * towers, and the cheapest honest fix is to let the city know where the traffic
- * is and duck under it.
+ * Also what the skyline is built around. Lowering the highway to where it is
+ * actually visible put it straight through the tops of the tall towers, and the
+ * cheapest honest fix is to let the city know where the traffic is and duck
+ * under it.
  */
 export function skyHighwayLanes(track: Track): SkyLane[] {
   const centre = trackCentre(track, new Vector3());
@@ -79,13 +80,26 @@ export function skyHighwayLanes(track: Track): SkyLane[] {
   return lanes;
 }
 
+/** Deterministic hash in [0, 1) from two small integers. */
+function hash(a: number, b: number): number {
+  const x = Math.sin(a * 12.9898 + b * 78.233) * 43758.5453;
+  return x - Math.floor(x);
+}
+
 /**
  * Commuter traffic in the sky above the circuit.
  *
- * Pure set dressing — it has no collision, no gameplay effect and no CPU cost.
- * Every craft's position along its lane is computed in the vertex shader from
- * its instance index and the clock, so two hundred and thirty moving objects are
- * one draw call and zero JavaScript per frame.
+ * Pure set dressing: no collision, no gameplay effect, one draw call.
+ *
+ * The positions used to be derived in the vertex shader from the instance index
+ * and a clock, which was cheaper still and quietly broke the motion blur. Three
+ * builds the velocity buffer from `positionLocal` and the object's previous
+ * matrix, and a material that computes its own position throws the first of
+ * those away — so every craft reported the velocity of a stationary octahedron
+ * at the group's origin and the blur smeared the traffic across the sky
+ * accordingly. Writing real instance matrices costs a few hundred `compose`
+ * calls a frame and buys correct velocity for nothing, because three keeps
+ * previous instance matrices for exactly this case.
  *
  * The lanes are straight because they are meant to be: a city's freight lanes
  * would be, and a straight line of lights crossing the sky reads instantly as
@@ -95,28 +109,69 @@ export function skyHighwayLanes(track: Track): SkyLane[] {
 export class SkyHighway {
   readonly group = new Group();
   private readonly mesh: InstancedMesh;
-  private readonly clock = uniform(0);
-  /** Where the lanes are centred, so they follow the circuit rather than the origin. */
-  private readonly centre = uniform(new Vector3());
+  private clock = 0;
+  private readonly lanes: SkyLane[];
+  private readonly speeds: number[] = [];
+  /** Each craft's place in its lane at time zero, as a fraction of the lane. */
+  private readonly offsets: number[] = [];
 
   constructor(track: Track) {
-    this.centre.value.copy(trackCentre(track, _centre));
+    this.lanes = skyHighwayLanes(track);
 
     // A squashed octahedron reads as a distant craft from any angle.
     const geometry = new OctahedronGeometry(1, 0);
     geometry.scale(1.6, 0.55, 4.2);
 
-    this.mesh = new InstancedMesh(geometry, this.material(), LANES * PER_LANE);
+    this.mesh = new InstancedMesh(geometry, SkyHighway.material(), LANES * PER_LANE);
     this.mesh.name = 'sky-highway';
     this.mesh.frustumCulled = false;
     // They are far away and never in the shadow frustum; skip both.
     this.mesh.castShadow = false;
     this.mesh.receiveShadow = false;
+
+    for (let i = 0; i < LANES * PER_LANE; i++) {
+      const lane = i % LANES;
+      const slot = Math.floor(i / LANES);
+      this.speeds.push(lane * 7 + 34);
+      // Evenly divided, then jittered by a per-craft hash. Perfectly even
+      // spacing is the one thing that reads instantly as a mechanism rather
+      // than as traffic. The jitter stays under half a slot, so nothing
+      // overtakes and no lane bunches.
+      this.offsets.push((slot + (hash(slot, lane) - 0.5) * 0.8) / PER_LANE);
+
+      _tint.copy(_hot).lerp(_cool, hash(lane, slot));
+      this.mesh.setColorAt(i, _tint);
+    }
+    if (this.mesh.instanceColor) this.mesh.instanceColor.needsUpdate = true;
+
+    this.place();
     this.group.add(this.mesh);
   }
 
   update(dt: number): void {
-    this.clock.value += dt;
+    this.clock += dt;
+    this.place();
+  }
+
+  /** Writes this frame's instance matrices. */
+  private place(): void {
+    for (let i = 0; i < LANES * PER_LANE; i++) {
+      const lane = this.lanes[i % LANES]!;
+      const progress = (this.offsets[i]! + (this.clock * this.speeds[i]!) / LANE_LENGTH) % 1;
+      const along = (progress - 0.5) * LANE_LENGTH;
+
+      _dummy.position.set(
+        lane.originX + lane.dirX * along,
+        lane.altitude,
+        lane.originZ + lane.dirZ * along,
+      );
+      // Nose down the lane. The hull's long axis is z, so the yaw comes from the
+      // lane's direction rather than from its heading angle.
+      _dummy.rotation.set(0, Math.atan2(lane.dirX, lane.dirZ), 0);
+      _dummy.updateMatrix();
+      this.mesh.setMatrixAt(i, _dummy.matrix);
+    }
+    this.mesh.instanceMatrix.needsUpdate = true;
   }
 
   dispose(): void {
@@ -125,76 +180,23 @@ export class SkyHighway {
   }
 
   /**
-   * Places and shades one craft entirely on the GPU.
+   * A dark body with a hot tail.
    *
-   * Lane parameters are derived arithmetically from the lane index rather than
-   * looked up, which keeps the whole thing to a handful of instructions and
-   * avoids shipping a per-instance buffer for data that never changes.
+   * At two kilometres the tail is the only part that reads at all, so it is the
+   * only part given any care: the hull is near-black and the glow behind it
+   * carries the craft's own colour, written per instance.
    */
-  private material(): MeshStandardNodeMaterial {
+  private static material(): MeshStandardNodeMaterial {
     const material = new MeshStandardNodeMaterial();
-
-    const index = instanceIndex.toFloat();
-    const lane = index.mod(float(LANES));
-    const slot = index.div(float(LANES)).floor();
-
-    // Heading, altitude and lateral offset spread the lanes into a lattice.
-    const heading = lane.mul(0.74).add(0.35);
-    // Low enough to be part of the city rather than a detail in the sky. The
-    // skyline is clipped out of these corridors rather than the other way
-    // round — see `skyHighwayLanes`.
-    const altitude = lane.mul(LANE_RISE).add(BASE_ALTITUDE);
-    const sideways = lane.sub((LANES - 1) / 2).mul(LANE_SPACING);
-    const speed = lane.mul(7).add(34);
-
-    const dirX = cos(heading);
-    const dirZ = sin(heading);
-    // Perpendicular to the lane, in the ground plane.
-    const perpX = dirZ.negate();
-    const perpZ = dirX;
-
-    // Spacing along the lane, scrolling with the clock and wrapping. The slots
-    // are evenly divided and then jittered by a per-craft hash: perfectly even
-    // spacing is the one thing that reads instantly as a shader rather than as
-    // traffic. The jitter stays under half a slot, so nothing overtakes.
-    const jitter = fract(sin(slot.mul(12.9898).add(lane.mul(78.233))).mul(43758.5453))
-      .sub(0.5)
-      .mul(0.8)
-      .div(float(PER_LANE));
-    const progress = fract(slot.div(float(PER_LANE)).add(jitter).add(this.clock.mul(speed).div(LANE_LENGTH)));
-    const along = progress.sub(0.5).mul(LANE_LENGTH);
-
-    // Rotate the hull to face down its lane.
-    const localX = positionLocal.x.mul(dirZ).sub(positionLocal.z.mul(dirX));
-    const localZ = positionLocal.x.mul(dirX).add(positionLocal.z.mul(dirZ));
-
-    const worldX = this.centre.x.add(dirX.mul(along)).add(perpX.mul(sideways)).add(localX);
-    const worldZ = this.centre.z.add(dirZ.mul(along)).add(perpZ.mul(sideways)).add(localZ);
-    const worldY = altitude.add(positionLocal.y);
-
-    material.positionNode = vec3(worldX, worldY, worldZ);
-
-    // Zero velocity, deliberately.
-    //
-    // Three computes the velocity buffer from `positionLocal` and the object's
-    // previous world matrix. This material throws `positionLocal` away and
-    // derives each craft's position from its index and the clock, so the
-    // velocity three computes is for a stationary octahedron at the group's
-    // origin — a vector with nothing to do with where the craft is drawn.
-    // Motion blur followed it and the traffic smeared across the sky.
-    //
-    // The honest fix would be to evaluate the same formula one frame back, which
-    // needs the matrices the velocity node keeps to itself. These are specks at
-    // two kilometres: no blur is a far better answer than the wrong blur.
-    material.mrtNode = mrt({ output, velocity: vec4(0, 0, 0, 0) });
-
-    // Dark body, hot tail. The tail is what actually reads at this distance.
     const tail = smoothstep(float(-1), float(-3.4), positionLocal.z);
-    const hue = fract(slot.mul(0.31));
-    const lights = mix(color(0xff5a4a), color(0x7ad8ff), hue);
+    // A slow shimmer, so a lane is not a line of identical lamps.
+    const shimmer = fract(instanceIndex.toFloat().mul(0.618)).mul(0.35).add(0.8);
+
     material.colorNode = vec3(0.06, 0.07, 0.09);
-    material.emissiveNode = lights.mul(tail).mul(3.4);
+    material.emissiveNode = tail.mul(shimmer).mul(3.4);
     material.roughnessNode = float(0.55);
+    // The instance colour tints the emissive tail rather than the hull.
+    material.vertexColors = true;
     return material;
   }
 }

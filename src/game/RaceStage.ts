@@ -2,6 +2,7 @@ import { Quaternion, Scene, Vector3 } from 'three';
 import { Track } from '@/track/Track';
 import { TrackMesh } from '@/track/TrackMesh';
 import { Environment } from '@/track/scenery/Environment';
+import { TunnelLights } from '@/track/scenery/TunnelLights';
 import { Skyline } from '@/track/scenery/Skyline';
 import { SkyHighway } from '@/track/scenery/SkyHighway';
 import type { TrackDefinition } from '@/track/TrackTypes';
@@ -48,6 +49,7 @@ export class RaceStage {
   private readonly trackMesh: TrackMesh;
   private readonly environment: Environment;
   private readonly skyline: Skyline;
+  private readonly tunnelLights: TunnelLights;
   private readonly highway: SkyHighway;
   private readonly ordnance = new WeaponVisuals();
   private readonly models = new Map<Craft, GliderModel>();
@@ -63,6 +65,9 @@ export class RaceStage {
 
     this.skyline = new Skyline(this.track);
     this.scene.add(this.skyline.group);
+
+    this.tunnelLights = new TunnelLights(this.track);
+    this.scene.add(this.tunnelLights.group);
 
     this.highway = new SkyHighway(this.track);
     this.scene.add(this.highway.group);
@@ -168,6 +173,7 @@ export class RaceStage {
 
     this.chase.update(camera, player, alpha, dt, lookingBack);
     this.environment.update(camera.position);
+    this.tunnelLights.update(camera.position);
     this.highway.update(dt);
     this.ordnance.update(this.race.projectiles);
     this.hud.update(this.race, dt);
@@ -183,6 +189,7 @@ export class RaceStage {
     this.trackMesh.dispose();
     this.environment.dispose();
     this.skyline.dispose();
+    this.tunnelLights.dispose();
     this.highway.dispose();
     this.ordnance.dispose();
     this.hud.dispose();

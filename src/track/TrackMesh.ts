@@ -1,4 +1,4 @@
-import { DoubleSide, Group, Mesh, type BufferGeometry } from 'three';
+import { BufferAttribute, BufferGeometry, DoubleSide, Group, Mesh, Vector3 } from 'three';
 import { MeshStandardNodeMaterial } from 'three/webgpu';
 import {
   abs,
@@ -23,6 +23,15 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { buildRibbon, type ProfilePoint } from './TrackRibbon';
 import type { ResolvedPad, Track } from './Track';
 import { wrap } from '@/core/math';
+
+/** Half-width of the tunnel bore, in metres. */
+const TUNNEL_RADIUS = 19;
+/** Rings around the bore. */
+const TUNNEL_SEGMENTS = 14;
+/** How thick the tunnel's walls are, in metres. */
+const TUNNEL_THICKNESS = 2.4;
+
+const _portal = new Vector3();
 
 /** Height of the barrier above the road, in metres. */
 const WALL_HEIGHT = 3.4;
@@ -180,32 +189,108 @@ export class TrackMesh {
     return pieces.length ? mergeGeometries(pieces, false)! : pieces[0]!;
   }
 
+  /**
+   * The tunnel shell, built as a shell rather than as a sheet.
+   *
+   * The cross-section runs up and over the inside of the arch, back down the
+   * outside of a larger arch, and closes on itself, so the sweep produces
+   * something with walls of an actual thickness. A single arch read as a
+   * cardboard cut-out at the portals, which is where the tunnel is looked at
+   * hardest — it is the one frame where you see its edge.
+   */
   private buildTunnels(): BufferGeometry | null {
     if (this.track.tunnels.length === 0) return null;
-    const pieces = this.track.tunnels.map((tunnel) => {
-      const segments = 14;
-      const radius = 19;
+    const pieces: BufferGeometry[] = [];
+
+    for (const tunnel of this.track.tunnels) {
       const profile: ProfilePoint[] = [];
-      for (let i = 0; i <= segments; i++) {
-        const angle = Math.PI - (i / segments) * Math.PI;
+
+      // Inside, left springing to right springing.
+      for (let i = 0; i <= TUNNEL_SEGMENTS; i++) {
+        const angle = Math.PI - (i / TUNNEL_SEGMENTS) * Math.PI;
         profile.push({
           anchor: 'centre',
-          offset: Math.cos(angle) * radius,
+          offset: Math.cos(angle) * TUNNEL_RADIUS,
           // Squashed arch: wider than it is tall, so the road stays the subject.
           up: Math.sin(angle) * tunnel.height,
-          u: i / segments,
+          u: i / TUNNEL_SEGMENTS,
           accent: 1,
         });
       }
-      return buildRibbon(this.track, {
-        profile,
-        step: 3,
-        vScale: tunnel.lightSpacing,
-        colourByDistrict: true,
-        range: { fromS: tunnel.fromS, toS: tunnel.toS },
-      });
-    });
+      // Outside, back the other way. `u` runs past 1 so the shading knows it is
+      // looking at the outside of the arch and not at the light runs.
+      for (let i = TUNNEL_SEGMENTS; i >= 0; i--) {
+        const angle = Math.PI - (i / TUNNEL_SEGMENTS) * Math.PI;
+        profile.push({
+          anchor: 'centre',
+          offset: Math.cos(angle) * (TUNNEL_RADIUS + TUNNEL_THICKNESS),
+          up: Math.sin(angle) * (tunnel.height + TUNNEL_THICKNESS),
+          u: 1 + i / TUNNEL_SEGMENTS,
+          accent: 1,
+        });
+      }
+      // And back to the first point, closing the ring at the left springing.
+      profile.push({ ...profile[0]!, u: 2 });
+
+      pieces.push(
+        buildRibbon(this.track, {
+          profile,
+          step: 3,
+          vScale: tunnel.lightSpacing,
+          colourByDistrict: true,
+          range: { fromS: tunnel.fromS, toS: tunnel.toS },
+        }),
+      );
+
+      pieces.push(this.buildTunnelPortal(tunnel.fromS, tunnel.height));
+      pieces.push(this.buildTunnelPortal(tunnel.toS, tunnel.height));
+    }
+
     return mergeGeometries(pieces, false);
+  }
+
+  /**
+   * The flat ring of masonry you see when you look a tunnel in the face.
+   *
+   * Without it the shell is an open tube and the gap between its two skins is
+   * visible from the road, which is worse than the sheet it replaced.
+   */
+  private buildTunnelPortal(s: number, height: number): BufferGeometry {
+    const frame = this.track.frameAt(s);
+    const positions: number[] = [];
+    const normals: number[] = [];
+    const uvs: number[] = [];
+    const colours: number[] = [];
+    const indices: number[] = [];
+
+    for (let i = 0; i <= TUNNEL_SEGMENTS; i++) {
+      const angle = Math.PI - (i / TUNNEL_SEGMENTS) * Math.PI;
+      for (const outer of [false, true]) {
+        const across = Math.cos(angle) * (outer ? TUNNEL_RADIUS + TUNNEL_THICKNESS : TUNNEL_RADIUS);
+        const up = Math.sin(angle) * (outer ? height + TUNNEL_THICKNESS : height);
+        _portal
+          .copy(frame.position)
+          .addScaledVector(frame.right, across)
+          .addScaledVector(frame.up, up);
+        positions.push(_portal.x, _portal.y, _portal.z);
+        normals.push(frame.tangent.x, frame.tangent.y, frame.tangent.z);
+        uvs.push(outer ? 1.6 : 1.4, i / TUNNEL_SEGMENTS);
+        colours.push(1, 1, 1, 1);
+      }
+    }
+
+    for (let i = 0; i < TUNNEL_SEGMENTS; i++) {
+      const a = i * 2;
+      indices.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
+    }
+
+    const geometry = new BufferGeometry();
+    geometry.setAttribute('position', new BufferAttribute(new Float32Array(positions), 3));
+    geometry.setAttribute('normal', new BufferAttribute(new Float32Array(normals), 3));
+    geometry.setAttribute('uv', new BufferAttribute(new Float32Array(uvs), 2));
+    geometry.setAttribute('color', new BufferAttribute(new Float32Array(colours), 4));
+    geometry.setIndex(indices);
+    return geometry;
   }
 
   // --- Materials ----------------------------------------------------------
@@ -220,6 +305,8 @@ export class TrackMesh {
    */
   private static roadMaterial(): MeshStandardNodeMaterial {
     const material = new MeshStandardNodeMaterial();
+    // The road is seen from underneath wherever the circuit is elevated.
+    material.side = DoubleSide;
     const accent = attribute<'vec4'>('color', 'vec4');
     const across = uv().x;
     const along = uv().y;
@@ -252,6 +339,7 @@ export class TrackMesh {
   /** Alternating accent and white blocks, the way a real kerb is painted. */
   private static kerbMaterial(): MeshStandardNodeMaterial {
     const material = new MeshStandardNodeMaterial();
+    material.side = DoubleSide;
     const accent = attribute<'vec4'>('color', 'vec4');
     const blocks = step(float(0.5), fract(uv().y));
     material.colorNode = mix(accent.xyz.mul(0.9), vec3(0.95, 0.96, 0.97), blocks);
@@ -269,6 +357,10 @@ export class TrackMesh {
    */
   private static wallMaterial(): MeshStandardNodeMaterial {
     const material = new MeshStandardNodeMaterial();
+    // A barrier is one sheet of geometry with no thickness, so culled to a
+    // single side it disappears the moment you are outside the circuit —
+    // which is most of the time, since the road ahead curves away from you.
+    material.side = DoubleSide;
     const accent = attribute<'vec4'>('color', 'vec4');
     const height = uv().x;
     const along = uv().y;
@@ -294,6 +386,9 @@ export class TrackMesh {
   /** The lit cap along the barrier, coloured by district. */
   private static trimMaterial(): MeshStandardNodeMaterial {
     const material = new MeshStandardNodeMaterial();
+    // Same sheet, same problem: the edge light has to cap the barrier from
+    // whichever side the barrier is being seen.
+    material.side = DoubleSide;
     const accent = attribute<'vec4'>('color', 'vec4');
     material.colorNode = accent.xyz.mul(0.2);
     material.emissiveNode = accent.xyz.mul(3.4);
@@ -330,7 +425,6 @@ export class TrackMesh {
     const along = uv().y.sub(0.5).abs().mul(2);
     const frame = max(across, along);
     const ring = smoothstep(float(0.55), float(0.75), frame).mul(smoothstep(float(1.0), float(0.9), frame));
-    const inner = smoothstep(float(0.62), float(0.42), frame);
     const pulse = sin(time.mul(2.4)).mul(0.5).add(0.5).mul(0.4).add(0.6);
 
     // Cosine palette: three channels of the same wave, a third of a turn apart,
@@ -340,9 +434,19 @@ export class TrackMesh {
       vec3(0.5, 0.5, 0.5).mul(cos(vec3(phase, phase.add(0.33), phase.add(0.67)).mul(Math.PI * 2))),
     );
 
-    material.colorNode = mix(wheel.mul(0.55).mul(inner), color(0xdfe8ee), ring);
-    material.emissiveNode = wheel.mul(inner).mul(pulse).mul(2.4).add(color(0xdfe8ee).mul(ring).mul(pulse).mul(2.2));
-    material.roughnessNode = float(0.35);
+    // Lit edge to edge. The previous version masked the colour to a small
+    // central diamond and left the rest of the quad at zero, so most of the pad
+    // was a black rectangle painted on the road — which is exactly what it
+    // looked like at racing speed.
+    const glow = mix(float(0.55), float(1), smoothstep(float(1), float(0.3), frame));
+
+    material.colorNode = mix(wheel.mul(0.5).add(0.1), color(0xeef4f8), ring);
+    material.emissiveNode = wheel
+      .mul(glow)
+      .mul(pulse)
+      .mul(2.2)
+      .add(color(0xeef4f8).mul(ring).mul(pulse).mul(2.4));
+    material.roughnessNode = float(0.3);
     return material;
   }
 
@@ -353,11 +457,16 @@ export class TrackMesh {
     const around = uv().x;
     const along = uv().y;
 
+    // `u` runs 0..1 around the inside of the arch, 1..2 back around the
+    // outside, and lands on 1.4/1.6 across the portal rings. Only the inside
+    // carries light runs; outside, a tunnel is a lump of concrete.
+    const inside = smoothstep(float(1.02), float(0.98), around);
+
     // Two light runs, at a quarter and three quarters around the arch.
     const runA = smoothstep(float(0.035), float(0), abs(around.sub(0.26)));
     const runB = smoothstep(float(0.035), float(0), abs(around.sub(0.74)));
     const gap = smoothstep(float(0.12), float(0.3), fract(along));
-    const lights = clamp(runA.add(runB), float(0), float(1)).mul(gap);
+    const lights = clamp(runA.add(runB), float(0), float(1)).mul(gap).mul(inside);
 
     material.colorNode = mix(color(0x1a1f24), color(0x2b3239), around.sub(0.5).abs().mul(2));
     material.emissiveNode = mix(accent.xyz.mul(0.6), vec3(1, 0.96, 0.9), float(0.7)).mul(lights).mul(5);

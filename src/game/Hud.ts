@@ -13,7 +13,7 @@ import { clamp, clamp01, lerp } from '@/core/math';
 const MARGIN = 46;
 /** Width and height of the shield bar, in pixels. */
 const BAR_WIDTH = 300;
-const BAR_HEIGHT = 9;
+const BAR_HEIGHT = 11;
 
 /**
  * Scale of the whole overlay when stopped, and when flat out.
@@ -77,7 +77,15 @@ const INK = 0xf2f6fa;
 // the way round the circuit, and a mid grey on pale cloud is not a colour
 // choice, it is a disappearing act.
 const DIM = 0xccd5dc;
-const WARN = 0xff3d5e;
+const WARN = 0xff2d55;
+/**
+ * The shield bar's fill.
+ *
+ * Saturated well past the HUD's cyan. It is drawn as a thin strip against a
+ * dark track and a dark track-side barrier, and the readout it replaced was the
+ * same value as half the circuit's own trim.
+ */
+const SHIELD = 0x00e5ff;
 
 /** "1ST", "2ND", "3RD"... for the finishing placard. */
 function ordinal(position: number): string {
@@ -125,7 +133,7 @@ export class Hud {
   private readonly shieldTrack: Mesh;
   private readonly shieldFill: Mesh;
   /** Drives the shield bar's colour without rebuilding its material. */
-  private readonly shieldColour = uniform(new Color(0x24d4ff));
+  private readonly shieldColour = uniform(new Color(SHIELD));
   private readonly weaponPanel: Group;
   /**
    * Everything that scales and sways as one piece.
@@ -189,11 +197,21 @@ export class Hud {
     this.bestLabel.setColour(DIM);
     this.weaponHint.setColour(DIM);
 
-    this.shieldTrack = new Mesh(new PlaneGeometry(BAR_WIDTH, BAR_HEIGHT), panelMaterial(0x1b242c, 0.75));
+    // A darker, more opaque track behind it, so the fill has something to be
+    // bright against wherever the circuit happens to be pale.
+    this.shieldTrack = new Mesh(new PlaneGeometry(BAR_WIDTH, BAR_HEIGHT + 4), panelMaterial(0x0a1015, 0.88));
     const fillMaterial = new MeshBasicNodeMaterial();
     fillMaterial.colorNode = this.shieldColour;
     fillMaterial.depthTest = false;
     fillMaterial.depthWrite = false;
+    // Transparent, though it is fully opaque.
+    //
+    // Three keeps two draw lists and empties the opaque one first, so
+    // `renderOrder` only sorts within a list. The fill was opaque and the track
+    // behind it was not, which meant the track was painted over the fill every
+    // frame: what looked like a washed-out bar was the fill seen through 88% of
+    // near-black. Joining the transparent list puts renderOrder back in charge.
+    fillMaterial.transparent = true;
     this.shieldFill = new Mesh(new PlaneGeometry(1, BAR_HEIGHT), fillMaterial);
     this.shieldTrack.renderOrder = 8;
     this.shieldFill.renderOrder = 9;
@@ -395,7 +413,10 @@ export class Hud {
     // next clean hit ends the race.
     const critical = this.shownShield < 0.28;
     const pulse = critical ? 0.6 + 0.4 * Math.sin(race.time * 12) : 1;
-    this.shieldColour.value.setHex(critical ? WARN : 0x24d4ff).multiplyScalar(pulse);
+    // Straight, unscaled. The HUD is composited after tone mapping now, so the
+    // colour authored here is the colour on screen and there is nothing to
+    // over-drive it past.
+    this.shieldColour.value.setHex(critical ? WARN : SHIELD).multiplyScalar(pulse);
     this.shieldFill.visible = this.shownShield > 0.002;
 
     this.positionValue.setText(String(player.position));

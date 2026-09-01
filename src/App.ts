@@ -32,13 +32,20 @@ const RESULTS_GRACE = 0.8;
  */
 const QUALITY_ORDER: readonly GameSettings['quality'][] = ['low', 'medium', 'high', 'ultra'];
 
-/** The menu does not need motion blur or speed streaks; it is not moving fast. */
+/**
+ * The menu does not need motion blur or speed streaks; it is not moving fast.
+ *
+ * It does get the lens flare, though: the showroom's overhead strips are the
+ * brightest things in it, and a hangar full of lights is exactly where a flare
+ * earns its keep.
+ */
 const MENU_QUALITY: PostFXQuality = {
   antialias: 'smaa',
   motionBlur: false,
   motionBlurSamples: 8,
   speedEffects: false,
   bloomStrength: 0.3,
+  lensflare: true,
 };
 
 /**

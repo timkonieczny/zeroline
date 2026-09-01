@@ -1,8 +1,28 @@
 import type { Camera, Scene } from 'three';
-import { PostProcessing, type Node, type WebGPURenderer } from 'three/webgpu';
-import { convertToTexture, float, mix, mrt, output, pass, uniform, vec2, velocity } from 'three/tsl';
+import {
+  ACESFilmicToneMapping,
+  NoToneMapping,
+  PostProcessing,
+  SRGBColorSpace,
+  type Node,
+  type WebGPURenderer,
+} from 'three/webgpu';
+import {
+  convertToTexture,
+  float,
+  mix,
+  mrt,
+  output,
+  pass,
+  renderOutput,
+  uniform,
+  vec2,
+  vec3,
+  velocity,
+} from 'three/tsl';
 import { bloom } from 'three/addons/tsl/display/BloomNode.js';
 import { motionBlur } from 'three/addons/tsl/display/MotionBlur.js';
+import { lensflare } from 'three/addons/tsl/display/LensflareNode.js';
 import { traa } from 'three/addons/tsl/display/TRAANode.js';
 import { smaa } from 'three/addons/tsl/display/SMAANode.js';
 import { chromaticAberration } from 'three/addons/tsl/display/ChromaticAberrationNode.js';
@@ -33,16 +53,18 @@ export interface PostFXQuality {
   motionBlur: boolean;
   /** Samples the motion blur takes along the velocity vector. */
   motionBlurSamples: number;
+  /** Ghosts and streaks pivoted around the centre from every bright spot. */
+  lensflare: boolean;
   /** Speed-driven radial streaks and chromatic fringing. */
   speedEffects: boolean;
   bloomStrength: number;
 }
 
 export const QUALITY_PRESETS: Record<QualityLevel, PostFXQuality> = {
-  low: { antialias: 'none', motionBlur: false, motionBlurSamples: 8, speedEffects: false, bloomStrength: 0.2 },
-  medium: { antialias: 'smaa', motionBlur: true, motionBlurSamples: 10, speedEffects: true, bloomStrength: 0.26 },
-  high: { antialias: 'smaa', motionBlur: true, motionBlurSamples: 16, speedEffects: true, bloomStrength: 0.32 },
-  ultra: { antialias: 'smaa', motionBlur: true, motionBlurSamples: 24, speedEffects: true, bloomStrength: 0.36 },
+  low: { antialias: 'none', motionBlur: false, motionBlurSamples: 8, speedEffects: false, bloomStrength: 0.2, lensflare: false },
+  medium: { antialias: 'smaa', motionBlur: true, motionBlurSamples: 10, speedEffects: true, bloomStrength: 0.26, lensflare: true },
+  high: { antialias: 'smaa', motionBlur: true, motionBlurSamples: 16, speedEffects: true, bloomStrength: 0.32, lensflare: true },
+  ultra: { antialias: 'smaa', motionBlur: true, motionBlurSamples: 24, speedEffects: true, bloomStrength: 0.36, lensflare: true },
 };
 
 /**
@@ -84,6 +106,8 @@ export class PostFX {
   private readonly aberrationStrength = uniform(0);
   private readonly radialAmount = uniform(0);
   private readonly bloomStrength = uniform(0.65);
+  /** How much of the lens flare is mixed in. */
+  private readonly flareStrength = uniform(0.55);
   /** Normalises the velocity buffer against a fixed reference frame time. */
   private readonly blurScale = uniform(1);
   private smoothedBlurScale = 1;
@@ -150,7 +174,33 @@ export class PostFX {
     // The scene pass is linear HDR, not tone-mapped, so the threshold has to sit
     // well above 1: sunlit white concrete is already brighter than that, and a
     // low threshold blooms the entire circuit into a white sheet.
-    node = asColour(node.add(bloom(node, this.bloomStrength, 0.7, BLOOM_THRESHOLD)));
+    const glow = asColour(bloom(node, this.bloomStrength, 0.7, BLOOM_THRESHOLD));
+    node = asColour(node.add(glow));
+
+    if (quality.lensflare) {
+      // Driven by the bloom rather than by a list of light sources, which is why
+      // it costs nothing to have it apply to all of them at once: the sun, the
+      // strip lights running a tunnel's ceiling, the showroom's overheads and a
+      // craft's exhaust are all just bright spots by the time the chain gets
+      // here. A flare rig that took a light's world position would have needed
+      // one entry per lamp and would still have missed the exhausts.
+      //
+      // The threshold sits high on purpose. Everything about this circuit is
+      // white in bright sun, and a low threshold puts ghosts around the road.
+      node = asColour(
+        node.add(
+          asColour(
+            lensflare(glow, {
+              ghostTint: vec3(0.72, 0.86, 1),
+              threshold: float(0.78),
+              ghostSamples: float(3),
+              ghostSpacing: float(0.32),
+              ghostAttenuationFactor: float(26),
+            }),
+          ).mul(this.flareStrength),
+        ),
+      );
+    }
 
     if (quality.speedEffects) {
       // The centre must be given explicitly: the addon defaults it to null and
@@ -166,9 +216,21 @@ export class PostFX {
       // The overlay scene has no background, so its pass clears to the
       // renderer's clear colour — which `Renderer` sets to fully transparent
       // precisely so this composite works.
+      //
+      // Tone mapping is applied by hand here, to the scene only, and the
+      // composite happens after it. Left to the pipeline it ran over the
+      // finished frame including the interface, and ACES does to a saturated
+      // interface colour exactly what it is designed to do to a saturated
+      // highlight: desaturates it and rolls it off. The shield bar was authored
+      // as a bright cyan and arrived on screen as a muddy teal. White text
+      // survives it unharmed, which is why this went unnoticed for so long.
       const overlayPass = pass(overlay.scene, overlay.camera);
       const hudColour = overlayPass.getTextureNode('output');
-      node = asColour(mix(node, hudColour, hudColour.a));
+
+      const scene = asColour(renderOutput(node, ACESFilmicToneMapping, SRGBColorSpace));
+      const hud = asColour(renderOutput(hudColour, NoToneMapping, SRGBColorSpace));
+      node = asColour(mix(scene, hud, hudColour.a));
+      this.post.outputColorTransform = false;
     }
 
     this.post.outputNode = node;

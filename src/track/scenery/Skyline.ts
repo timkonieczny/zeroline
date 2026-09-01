@@ -1,16 +1,12 @@
 import { BoxGeometry, Color, Group, InstancedMesh, Matrix4, Object3D, Vector3 } from 'three';
 import { MeshStandardNodeMaterial } from 'three/webgpu';
 import {
-  cameraPosition,
   color,
   float,
   floor,
   fract,
   instanceIndex,
   mix,
-  normalWorld,
-  positionWorld,
-  pow,
   sin,
   smoothstep,
   step,
@@ -131,19 +127,11 @@ export class Skyline {
 
   constructor(track: Track) {
     const rng = new Rng(0xb0d1e5);
-    const sun = track.definition.sun;
-    const elevation = (sun.elevation * Math.PI) / 180;
-    const azimuth = (sun.azimuth * Math.PI) / 180;
-    const sunDirection: [number, number, number] = [
-      Math.cos(elevation) * Math.cos(azimuth),
-      Math.sin(elevation),
-      Math.cos(elevation) * Math.sin(azimuth),
-    ];
     const geometry = new BoxGeometry(1, 1, 1);
     // Origin at the base, so scaling a building grows it upward.
     geometry.translate(0, 0.5, 0);
 
-    this.mesh = new InstancedMesh(geometry, Skyline.material(sunDirection), CAPACITY);
+    this.mesh = new InstancedMesh(geometry, Skyline.material(), CAPACITY);
     this.mesh.name = 'skyline';
     this.mesh.castShadow = true;
     this.mesh.receiveShadow = true;
@@ -483,7 +471,7 @@ export class Skyline {
    * looking like an untuned television. Flooring the scaled UV first gives one
    * random value per window, which is what makes it read as a building.
    */
-  private static material(sunDirection: [number, number, number]): MeshStandardNodeMaterial {
+  private static material(): MeshStandardNodeMaterial {
     const material = new MeshStandardNodeMaterial();
     const seed = instanceIndex.toFloat();
 
@@ -520,56 +508,35 @@ export class Skyline {
 
     // --- What the glass actually shows ---------------------------------
     //
-    // Leaving this to the scene's environment map was the mistake: that probe
-    // is a smooth sky gradient at 42% intensity, so a metallic facade came
-    // back as flat dark blue paint and read as no reflection at all. There is
-    // nothing wrong with the probe — there is simply nothing in it to see.
+    // A curtain-wall tower is a mirror with a grid drawn on it, not a concrete
+    // block with mirrors set into it. The first attempt reflected only inside
+    // the window rectangles and left the mullions opaque, which at any distance
+    // averages back out to a flat painted wall — the reflection was there and
+    // there was no way to see it.
     //
-    // So the reflection is computed here instead, against a sky and sea
-    // written as arithmetic: bright at the horizon, deep overhead, water
-    // below, a sun glint, and a band of city at eye level. A real probe per
-    // building is out of the question and screen-space reflection costs a
-    // pass; this costs a dozen instructions and is the only version of the
-    // three that has structure in it, which is the whole point.
-    const view = positionWorld.sub(cameraPosition).normalize();
-    const bounce = view.sub(normalWorld.mul(view.dot(normalWorld).mul(2))).normalize();
-    const up = bounce.y;
-
-    const zenith = vec3(0.16, 0.36, 0.72);
-    const horizon = vec3(0.86, 0.93, 1.0);
-    const water = vec3(0.1, 0.26, 0.34);
-    const sky = mix(horizon, zenith, smoothstep(float(0.02), float(0.5), up));
-    const sea = mix(horizon, water, smoothstep(float(-0.02), float(-0.35), up));
-    let mirror = mix(sea, sky, step(float(0), up));
-
-    // A band of city across the horizon: vertical stripes that only exist
-    // where the reflection is looking level. Enough to break the gradient up,
-    // not enough to pretend it is a real skyline.
-    const level = smoothstep(float(0.16), float(0), up.abs());
-    const stripe = step(float(0.45), fract(bounce.x.div(bounce.z.abs().add(0.35)).mul(3.7)));
-    mirror = mix(mirror, mirror.mul(0.62), stripe.mul(level).mul(0.7));
-
-    const glint = pow(bounce.dot(vec3(...sunDirection)).max(0), 220);
-    mirror = mirror.add(vec3(1.0, 0.94, 0.82).mul(glint).mul(2.2));
-
-    // Fresnel. Head on, a window is mostly its own tint; at a grazing angle
-    // it is a mirror. Without this the whole city reflects equally and reads
-    // as chrome rather than as glass.
-    const facing = view.dot(normalWorld).abs();
-    const fresnel = mix(float(0.22), float(0.96), pow(facing.oneMinus(), 3));
-    // Mullions stay opaque; only the panes mirror anything.
-    const glazed = mix(tint, mix(tint, mirror, fresnel), pane);
+    // So the whole facade is the glass now. It is also a real reflection rather
+    // than an arithmetic one: `scene.environment` is the painted sky panorama,
+    // and a metal surface with almost no roughness returns it with the clouds
+    // still in it. That is what the earlier hand-written sky-and-sea function
+    // was standing in for, back when the probe was a smooth gradient with
+    // nothing to see.
+    //
+    // The mullion grid stays as a faint darkening, so the tower still reads as
+    // storeys rather than as a mirrored slab.
+    const mullion = pane.oneMinus().mul(0.12);
+    const glazed = tint.mul(mullion.oneMinus());
 
     material.colorNode = mix(concrete, glazed, glass);
     // Barely there. Lit windows are a detail on a daylit facade; turned up they
     // make a shadowed street read as night, which the canyon district does more
     // than enough of on its own.
     material.emissiveNode = color(0xfff2dc).mul(lit).mul(mix(float(0.13), float(0.07), glass));
-    material.roughnessNode = mix(mix(float(0.74), float(0.2), pane), mix(float(0.22), float(0.06), pane), glass);
-    // The reflection above is already in `colorNode`, so the environment probe
-    // only has to add a little sheen. At the old 0.6 the two stacked and the
-    // facades went dark again.
-    material.metalnessNode = mix(float(0.05), float(0.12), glass);
+    // Near-mirror on the glass, with the mullions a shade rougher so the grid
+    // survives in the reflection instead of being polished away.
+    material.roughnessNode = mix(mix(float(0.74), float(0.2), pane), mix(float(0.16), float(0.04), pane), glass);
+    // Full metal on the glass towers: that is the whole reflection, and it is
+    // the sky probe that supplies it.
+    material.metalnessNode = mix(float(0.05), float(1), glass);
     material.vertexColors = true;
     return material;
   }
