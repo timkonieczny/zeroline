@@ -424,6 +424,7 @@ export class App {
 
     this.perf.textContent = [
       `${(1 / Math.max(frameTime, 1e-6)).toFixed(0).padStart(3)} fps   ${(frameTime * 1000).toFixed(2)} ms`,
+      `gpu        ${this.renderer.gpuTime().toFixed(2)} ms`,
       `mode       ${this.mode}`,
       `backend    ${stats.backend}`,
       `adapter    ${stats.adapter}`,

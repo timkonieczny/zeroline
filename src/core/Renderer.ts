@@ -48,6 +48,11 @@ export class Renderer {
   private frameTimeSum = 0;
   private frameTimeCount = 0;
 
+  /** Milliseconds the GPU spent on the last frame it was asked about. */
+  private lastGpuMs = 0;
+  /** True while a timestamp resolve is in flight, so they do not stack up. */
+  private resolvingGpuTime = false;
+
   /** What the GPU we ended up on calls itself. Shown on the F3 overlay. */
   private adapterName = 'unknown';
 
@@ -69,6 +74,11 @@ export class Renderer {
       antialias: false, // Handled in the post chain by TRAA, which is cheaper here.
       powerPreference: 'high-performance',
       alpha: false,
+      // GPU timestamps. The frame time on the F3 overlay is wall clock, which
+      // on a machine with anything else running says as much about the browser
+      // as about the game — and says nothing at all in a tab the browser has
+      // throttled. This is the number to tune against.
+      trackTimestamp: true,
     });
     this.renderer.toneMapping = ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 0.82;
@@ -119,7 +129,15 @@ export class Renderer {
         .filter((part) => part)
         .join(' ') || 'unnamed adapter';
 
-      const device = await adapter.requestDevice();
+      // Every feature the adapter offers, which is what three asks for when it
+      // creates the device itself. Taking that job over and then requesting
+      // nothing left the renderer without timestamp queries — and without
+      // `core-features-and-limits`, which three reads as compatibility mode and
+      // answers by turning multisampling off. A device is not a smaller thing
+      // than the adapter it came from unless you ask for one.
+      const device = await adapter.requestDevice({
+        requiredFeatures: [...adapter.features] as GPUFeatureName[],
+      });
       (this.renderer as unknown as { backend: { parameters: { device?: GPUDevice } } }).backend.parameters.device =
         device;
     } catch {
@@ -189,6 +207,31 @@ export class Renderer {
 
     if (average > this.budget * 1.12) this.setResolutionScale(this.scale - 0.06);
     else if (average < this.budget * 0.82) this.setResolutionScale(this.scale + 0.03);
+  }
+
+  /**
+   * GPU milliseconds for a recent frame.
+   *
+   * Resolving a timestamp query is asynchronous — the results are read back
+   * from the device — so this returns the last answer and starts fetching the
+   * next one. Called a few times a second from the perf overlay, that is a
+   * reading a fraction of a second old, which is what a tuning number needs to
+   * be and no more.
+   */
+  gpuTime(): number {
+    if (!this.resolvingGpuTime) {
+      this.resolvingGpuTime = true;
+      void this.renderer
+        .resolveTimestampsAsync()
+        .then(() => {
+          this.lastGpuMs = this.renderer.info.render.timestamp;
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          this.resolvingGpuTime = false;
+        });
+    }
+    return this.lastGpuMs;
   }
 
   get stats(): RendererStats {

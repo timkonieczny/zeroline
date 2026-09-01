@@ -213,17 +213,17 @@ export class PostFX {
     if (quality.gtao) {
       // Ground-truth ambient occlusion, from depth alone.
       //
-      // The node will take a normal target if the scene pass writes one, and
+      // The node takes a normal target if the scene pass writes one and
       // reconstructs normals from depth when it does not. A third full-screen
       // attachment written every frame is real bandwidth on an integrated GPU —
-      // which is the part of this frame that is actually scarce — so it starts
-      // without one. If the road's grazing angles turn out to need real
-      // normals, the fix is `normal: normalView` in the MRT above and passing
-      // the texture in here.
-      // The node's own documentation says normals may be omitted and the
-      // shader will reconstruct them from depth. Only its type declaration
-      // disagrees, so the null goes in through a cast rather than the
-      // decision being made by a `.d.ts`.
+      // which is the part of this frame that is actually scarce — so it goes
+      // without. If the road's grazing angles turn out to need real normals,
+      // the fix is `normal: normalView` in the MRT above and passing the
+      // texture in here.
+      //
+      // The node's own documentation says exactly that. Only its type
+      // declaration disagrees, so the null goes in through a cast rather than
+      // the decision being made by a `.d.ts`.
       const withoutNormals = null as unknown as Parameters<typeof ao>[1];
       const occlusion = ao(depthTexture, withoutNormals, camera);
       this.aoNode = occlusion;
