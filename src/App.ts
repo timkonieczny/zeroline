@@ -77,6 +77,12 @@ export class App {
   private mode: Mode = 'menu';
   /** Seconds since the race finished, used to hold the classification up. */
   private finishedFor = 0;
+  /** True while the curtain is down, which suspends input and the sim. */
+  private transitioning = false;
+  /** True while the pause panel is up. */
+  private paused = false;
+  private readonly curtain = document.getElementById('curtain');
+  private readonly curtainStatus = document.getElementById('curtain-status');
   /** True once the classification is animating away and the menu is next. */
   private leavingRace = false;
 
@@ -117,7 +123,9 @@ export class App {
 
     this.onStatus('Building front end');
     this.menu = new MenuStage(this.pixelRatio(), this.buildSettingRows());
-    this.menu.onStart = (selection) => this.startRace(selection);
+    this.menu.onStart = (selection) => {
+      void this.behindCurtain('Building circuit', () => this.startRace(selection));
+    };
     this.menu.onSettingChanged = (row) => this.onSettingChanged(row);
     this.menu.attachRenderer(this.renderer.renderer);
     this.menuPost = new PostFX(this.renderer.renderer, this.menu.scene, this.menu.camera, MENU_QUALITY, {
@@ -149,6 +157,49 @@ export class App {
   };
 
   /** Builds the race stage on first use, then reuses it. */
+  /**
+   * Drops the curtain, does the work, and lifts it again.
+   *
+   * The work is synchronous and slow — building a circuit is tens of
+   * milliseconds of mesh generation and a racing-line relaxation on top — so it
+   * has to happen with the overlay already painted. Two animation frames is
+   * what that costs: one for the class change to take effect and one for the
+   * compositor to show it.
+   */
+  private async behindCurtain(label: string, work: () => void): Promise<void> {
+    this.transitioning = true;
+    if (this.curtainStatus) this.curtainStatus.textContent = label;
+    this.curtain?.classList.remove('hidden');
+
+    await App.nextFrame();
+    await App.nextFrame();
+    // And a beat longer, so the fade in is seen rather than skipped over.
+    await new Promise((resolve) => window.setTimeout(resolve, 260));
+
+    work();
+
+    // One more frame so the first frame of the new scene is on screen before
+    // the curtain starts to lift, rather than a stale one from behind it.
+    await App.nextFrame();
+    await App.nextFrame();
+    this.curtain?.classList.add('hidden');
+    this.transitioning = false;
+    this.input.clearMenuActions();
+  }
+
+  /**
+   * One animation frame, or a tenth of a second, whichever comes first.
+   *
+   * A backgrounded tab can go a long time between animation frames, and the
+   * curtain must not be able to strand the game behind it waiting for one.
+   */
+  private static nextFrame(): Promise<unknown> {
+    return Promise.race([
+      new Promise(requestAnimationFrame),
+      new Promise((resolve) => window.setTimeout(resolve, 100)),
+    ]);
+  }
+
   private startRace(selection: MenuSelection): void {
     const setup = {
       mode: selection.mode,
@@ -206,14 +257,23 @@ export class App {
   }
 
   private returnToMenu(): void {
-    this.mode = 'menu';
-    this.leavingRace = false;
-    this.input.clearMenuActions();
-    this.audio.stopEngine();
+    if (this.transitioning) return;
+    void this.behindCurtain('Returning to the hangar', () => {
+      this.mode = 'menu';
+      this.leavingRace = false;
+      this.race?.hud.pause.hide();
+      this.paused = false;
+      this.input.clearMenuActions();
+      this.audio.stopEngine();
+    });
   }
 
   private tick(step: number): void {
     if (this.mode !== 'race' || !this.race) return;
+    // Frozen, not slowed: the simulation is deterministic and stepping it at
+    // all while nobody is driving would put the field somewhere the player
+    // did not leave it.
+    if (this.paused || this.transitioning) return;
 
     const race = this.race.race;
     this.race.tick(this.input.snapshot, step);
@@ -228,6 +288,8 @@ export class App {
 
   private render(alpha: number, frameTime: number): void {
     this.input.update(frameTime);
+
+    if (this.transitioning) this.input.clearMenuActions();
 
     let action = this.input.nextMenuAction();
     while (action) {
@@ -255,9 +317,21 @@ export class App {
           this.audio.menuConfirm();
           this.dismissResults();
         }
+      } else if (this.paused) {
+        const choice = this.race?.hud.pause.handle(action) ?? null;
+        if (action === 'up' || action === 'down') this.audio.menuMove();
+        if (choice === 'resume') {
+          this.audio.menuBack();
+          this.race?.hud.pause.hide();
+          this.paused = false;
+        } else if (choice === 'quit') {
+          this.audio.menuConfirm();
+          this.returnToMenu();
+        }
       } else if (action === 'pause' || action === 'back') {
         this.audio.menuBack();
-        this.returnToMenu();
+        this.race?.hud.pause.show();
+        this.paused = true;
       }
       action = this.input.nextMenuAction();
     }
@@ -268,7 +342,15 @@ export class App {
     } else {
       const player = this.race.race.player;
       if (player.telemetry.impact > 0) this.input.rumble(player.telemetry.impact, 140);
-      this.race.render(alpha, frameTime, this.input.snapshot.lookBack, this.renderer.camera);
+      // The panel still animates while the world is held, so the render step
+      // is passed through even when the simulation is not.
+      this.race.render(
+        alpha,
+        this.paused ? 0 : frameTime,
+        this.input.snapshot.lookBack,
+        this.renderer.camera,
+        frameTime,
+      );
       this.director?.update(frameTime);
       this.racePost.setDrive(player.telemetry.speedFraction, player.state.boost > 0, frameTime);
       this.racePost.render();

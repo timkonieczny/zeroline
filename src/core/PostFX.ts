@@ -106,8 +106,14 @@ export class PostFX {
   private readonly aberrationStrength = uniform(0);
   private readonly radialAmount = uniform(0);
   private readonly bloomStrength = uniform(0.65);
-  /** How much of the lens flare is mixed in. */
-  private readonly flareStrength = uniform(0.55);
+  /**
+   * How much of the lens flare is mixed in.
+   *
+   * Low. It is added on top of a frame that already has bloom in it, and the
+   * ghosts land on white concrete, where anything stronger reads as a smear on
+   * the road rather than as an artefact of the lens.
+   */
+  private readonly flareStrength = uniform(0.32);
   /** Normalises the velocity buffer against a fixed reference frame time. */
   private readonly blurScale = uniform(1);
   private smoothedBlurScale = 1;

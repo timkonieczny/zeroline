@@ -6,6 +6,9 @@ import type { Race } from './Race';
 import { WEAPONS } from './weapons/Weapons';
 import { ResultsTable, formatTime } from './Results';
 import { Minimap } from './Minimap';
+import { PauseMenu, type PauseChoice } from './PauseMenu';
+
+export type { PauseChoice };
 import type { Track } from '@/track/Track';
 import { clamp, clamp01, lerp } from '@/core/math';
 
@@ -114,6 +117,7 @@ export class Hud {
 
   private readonly root = new Group();
   private readonly results: ResultsTable;
+  readonly pause: PauseMenu;
   private readonly minimap: Minimap;
   /** Fades the racing readouts down while the classification is up. */
   private raceChrome = 1;
@@ -174,6 +178,12 @@ export class Hud {
     this.scene.add(this.root);
     this.results = new ResultsTable(pixelRatio);
     this.scene.add(this.results.group);
+
+    // Outside `root`, like the finishing placard: the racing chrome is hidden
+    // wholesale when the flag is out, and a pause panel that vanished with it
+    // would be a menu you cannot leave.
+    this.pause = new PauseMenu(pixelRatio);
+    this.scene.add(this.pause.group);
 
     this.minimap = new Minimap(track, fieldSize);
     this.plane.add(this.minimap.group);
@@ -317,6 +327,8 @@ export class Hud {
       mesh.setPixelRatio(pixelRatio);
     }
     this.results.setPixelRatio(pixelRatio);
+    this.pause.setPixelRatio(pixelRatio);
+    this.pause.resize(width, height);
 
     this.layout();
   }
@@ -397,6 +409,7 @@ export class Hud {
 
   /** Pulls this frame's values off the race and eases the display toward them. */
   update(race: Race, dt: number): void {
+    this.pause.update(dt);
     const player = race.player;
 
     const targetSpeed = Math.max(0, player.telemetry.speed * 3.6);

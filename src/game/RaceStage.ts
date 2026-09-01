@@ -155,7 +155,21 @@ export class RaceStage {
   }
 
   /** Places everything for this frame. `alpha` blends between the last two ticks. */
-  render(alpha: number, dt: number, lookingBack: boolean, camera: Parameters<ChaseCamera['update']>[0]): void {
+  /**
+   * Places everything for this frame.
+   *
+   * `dt` is the world's time step and `uiDt` the real one. They differ while the
+   * game is paused: the circuit is held exactly where the player left it, and
+   * the interface over the top of it still has to animate — a pause panel that
+   * froze along with the world would never arrive.
+   */
+  render(
+    alpha: number,
+    dt: number,
+    lookingBack: boolean,
+    camera: Parameters<ChaseCamera['update']>[0],
+    uiDt = dt,
+  ): void {
     for (const [craft, model] of this.models) {
       craft.sampleRender(alpha, _position, _rotation);
       model.object.position.copy(_position);
@@ -176,7 +190,7 @@ export class RaceStage {
     this.tunnelLights.update(camera.position);
     this.highway.update(dt);
     this.ordnance.update(this.race.projectiles);
-    this.hud.update(this.race, dt);
+    this.hud.update(this.race, uiDt);
   }
 
   resize(width: number, height: number, pixelRatio: number): void {
