@@ -48,12 +48,8 @@ export class Renderer {
   private frameTimeSum = 0;
   private frameTimeCount = 0;
 
-  /** Mean GPU milliseconds per frame, over the last drained window. */
+  /** GPU milliseconds for the most recent frame the pool could account for. */
   private lastGpuMs = 0;
-  /** Frames rendered since the timestamp pool was last drained. */
-  private framesSinceDrain = 0;
-  /** How many frames the resolve currently in flight is accounting for. */
-  private framesInFlight = 0;
   /** True while a timestamp resolve is in flight, so they do not stack up. */
   private resolvingGpuTime = false;
   /** False when the device cannot answer timestamp queries; see `init`. */
@@ -240,9 +236,6 @@ export class Renderer {
    * never visibly pumps, and recovers more slowly than it drops.
    */
   reportFrame(frameTime: number): void {
-    // Counted before the early return: the GPU timer needs to know how many
-    // frames its next total covers whether or not the scaler is running.
-    this.framesSinceDrain++;
     if (!this.adaptive) return;
     this.frameTimeSum += frameTime;
     this.frameTimeCount++;
@@ -271,25 +264,24 @@ export class Renderer {
    * drains warns to the console and then hands back a frame from the opening
    * seconds of the session.
    *
-   * And the pool answers with the *total* across every pass it has accumulated
-   * since it was last drained, not with one frame. Drained four times a second
-   * at sixty frames a second, that total is fifteen frames of work and the
-   * number on the overlay is fifteen times what a frame costs — a reading that
-   * also moves when the drain rate does, which is the worst property a tuning
-   * number can have. So the frames are counted and the total divided by them.
+   * The value is one frame's worth, not the window's. The pool holds queries
+   * for every frame since the last drain, but it tags each with the frame that
+   * issued it and returns the sum for the most recent one only — so no
+   * arithmetic is needed here, and any applied is wrong. A previous version
+   * divided by the frames elapsed, on the strength of a doc comment that says
+   * "resolves all pending queries and returns the total duration" without
+   * mentioning the grouping. That made the reading a frame's cost over a frame
+   * count, which is not a quantity, and it ranked the quality presets backwards
+   * because a cheaper preset resolves sooner and so divides by less.
    */
   gpuTime(): number {
     if (this.gpuTiming && !this.resolvingGpuTime) {
       this.resolvingGpuTime = true;
-      // Captured now: the pool resets when the resolve lands, so these are the
-      // frames that total belongs to.
-      this.framesInFlight = Math.max(1, this.framesSinceDrain);
-      this.framesSinceDrain = 0;
       void this.renderer
         .resolveTimestampsAsync()
         .then((ms) => {
           // Undefined when there is no pool yet, i.e. before the first pass.
-          if (typeof ms === 'number') this.lastGpuMs = ms / this.framesInFlight;
+          if (typeof ms === 'number') this.lastGpuMs = ms;
         })
         .catch(() => undefined)
         .finally(() => {

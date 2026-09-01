@@ -424,8 +424,10 @@ export class App {
     if (this.perfTimer < 0.25) return;
     this.perfTimer = 0;
 
-    // Drained whether or not the overlay is up: the timestamp pool fills in
-    // about a second of play and stops recording until someone empties it.
+    // Drained whether or not the overlay is up: at twenty-odd passes a frame
+    // the pool's two thousand queries last about half a second, after which it
+    // stops recording until someone empties it. A quarter-second tick keeps
+    // comfortably ahead of that.
     const gpuMs = this.renderer.gpuTime();
     if (this.perf.hidden) return;
 
@@ -435,7 +437,7 @@ export class App {
 
     this.perf.textContent = [
       `${(1 / Math.max(frameTime, 1e-6)).toFixed(0).padStart(3)} fps   ${(frameTime * 1000).toFixed(2)} ms`,
-      `gpu        ${gpuMs.toFixed(2)} ms/frame`,
+      `gpu        ${gpuMs.toFixed(2)} ms`,
       `mode       ${this.mode}`,
       `backend    ${stats.backend}`,
       `adapter    ${stats.adapter}`,
