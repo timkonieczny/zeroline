@@ -31,6 +31,7 @@ import {
 import type { TrackDefinition } from '../TrackTypes';
 import type { Track } from '../Track';
 import { skyTexture } from './SkyTexture';
+import { shadowTexelSize, snapToShadowTexels } from './ShadowSnap';
 
 /** Radius of the sky dome. Must sit inside the camera's far plane. */
 const SKY_RADIUS = 4200;
@@ -40,6 +41,14 @@ export const SEA_LEVEL = -26;
 const SHADOW_SIZE = 2048;
 /** Half-extent of the sun's shadow frustum around the player, in metres. */
 const SHADOW_EXTENT = 190;
+/**
+ * World size of one shadow-map texel, in metres.
+ *
+ * 380 metres of frustum over 2048 texels: about nineteen centimetres, or five
+ * and a half texels to the metre. The frustum only ever moves in whole
+ * multiples of this.
+ */
+const SHADOW_TEXEL = shadowTexelSize(SHADOW_EXTENT, SHADOW_SIZE);
 
 const _sunDirection = new Vector3();
 const _target = new Vector3();
@@ -200,7 +209,13 @@ export class Environment {
     // both wrong and a source of translation in the velocity buffer.
     this.sky.position.copy(focus);
     this.sea.position.set(focus.x, SEA_LEVEL, focus.z);
-    _target.copy(focus);
+    // Snapped to whole texels. The frustum follows the player, and following
+    // by fractions of a texel is what makes every shadow edge crawl: the depth
+    // samples land somewhere slightly different each frame even where nothing
+    // has moved. Nothing else uses this — the sun is directional, so where its
+    // frustum sits changes which slice of the world is in the shadow map and
+    // nothing about the lighting.
+    snapToShadowTexels(focus, _sunDirection, this.sun.shadow.camera.up, SHADOW_TEXEL, _target);
     this.sun.target.position.copy(_target);
     this.sun.position.copy(_target).addScaledVector(_sunDirection, 600);
     this.sun.target.updateMatrixWorld();
