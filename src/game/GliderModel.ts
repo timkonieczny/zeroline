@@ -1,4 +1,4 @@
-import { BufferAttribute, BufferGeometry, Color, Group, Mesh, type Object3D } from 'three';
+import { BufferAttribute, BufferGeometry, Color, DoubleSide, Group, Mesh, type Object3D } from 'three';
 import { MeshPhysicalNodeMaterial, MeshStandardNodeMaterial } from 'three/webgpu';
 import { color, float, mix, oneMinus, smoothstep, uniform, uv, vec3 } from 'three/tsl';
 import type { HullSpec, Team } from '@/data/teams';
@@ -32,6 +32,44 @@ function emptySweep(): Sweep {
   return { positions: [], normals: [], uvs: [], indices: [] };
 }
 
+/** Copies one sweep onto the end of another, rebasing its indices. */
+function appendSweep(target: Sweep, source: Sweep): void {
+  const offset = target.positions.length / 3;
+  target.positions.push(...source.positions);
+  target.uvs.push(...source.uvs);
+  for (const index of source.indices) target.indices.push(index + offset);
+}
+
+/**
+ * Flips the winding of a closed shell if it came out inside-out.
+ *
+ * The signed volume of a closed mesh is positive when its faces wind
+ * counter-clockwise seen from outside, and negative when they do not. Sweeps
+ * are easy to get backwards — every hull in this game was built inside-out
+ * for a while, which reads as a craft you can see straight through, because
+ * the near wall is culled and the far wall's interior is not. Checking is two
+ * dozen lines and removes the whole class of mistake.
+ */
+function ensureOutwardWinding(sweep: Sweep): void {
+  const { positions, indices } = sweep;
+  let volume = 0;
+  for (let i = 0; i < indices.length; i += 3) {
+    const a = indices[i]! * 3;
+    const b = indices[i + 1]! * 3;
+    const c = indices[i + 2]! * 3;
+    const ax = positions[a]!, ay = positions[a + 1]!, az = positions[a + 2]!;
+    const bx = positions[b]!, by = positions[b + 1]!, bz = positions[b + 2]!;
+    const cx = positions[c]!, cy = positions[c + 1]!, cz = positions[c + 2]!;
+    volume += ax * (by * cz - bz * cy) - ay * (bx * cz - bz * cx) + az * (bx * cy - by * cx);
+  }
+  if (volume >= 0) return;
+  for (let i = 0; i < indices.length; i += 3) {
+    const swap = indices[i + 1]!;
+    indices[i + 1] = indices[i + 2]!;
+    indices[i + 2] = swap;
+  }
+}
+
 function toGeometry(sweep: Sweep): BufferGeometry {
   const geometry = new BufferGeometry();
   geometry.setAttribute('position', new BufferAttribute(new Float32Array(sweep.positions), 3));
@@ -58,10 +96,12 @@ function heightProfile(t: number, nose: number): number {
 /**
  * Builds the hull by sweeping the cross-section from nose to tail.
  *
+ * Exported so the geometry audit can check its winding without a GPU.
+ *
  * Craft point down -Z, matching the three.js convention, so the nose sits at
  * -length/2 and the thrusters at +length/2.
  */
-function buildHull(hull: HullSpec): BufferGeometry {
+export function buildHull(hull: HullSpec): BufferGeometry {
   const sweep = emptySweep();
   const across = SECTION.length;
 
@@ -99,11 +139,12 @@ function buildHull(hull: HullSpec): BufferGeometry {
     sweep.indices.push(last + c, centre, last + ((c + 1) % across));
   }
 
+  ensureOutwardWinding(sweep);
   return toGeometry(sweep);
 }
 
 /** A swept fin plate, mirrored to both sides of the tail. */
-function buildFins(hull: HullSpec): BufferGeometry {
+export function buildFins(hull: HullSpec): BufferGeometry {
   const sweep = emptySweep();
   const span = hull.beam * hull.finSpan * 0.5;
   const rake = (hull.finRake * Math.PI) / 180;
@@ -112,6 +153,10 @@ function buildFins(hull: HullSpec): BufferGeometry {
   const thickness = 0.11;
 
   for (const side of [-1, 1] as const) {
+    // Each plate is built and corrected on its own. Mirroring across X reverses
+    // handedness, so emitting both from one loop leaves the second plate wound
+    // inside-out — and a combined signed volume of nearly zero, which hides it.
+    const plate = emptySweep();
     const rootX = side * hull.beam * 0.42;
     // Four corners of the plate, raked upward and outward toward the tail.
     const corners: [number, number, number][] = [
@@ -120,11 +165,10 @@ function buildFins(hull: HullSpec): BufferGeometry {
       [rootX + side * span, hull.height * 0.25 + Math.sin(rake) * span, tipZ],
       [rootX, hull.height * 0.1, tipZ],
     ];
-    const base = sweep.positions.length / 3;
     for (const offset of [-thickness, thickness]) {
       for (const [x, y, z] of corners) {
-        sweep.positions.push(x + side * offset, y, z);
-        sweep.uvs.push((z - rootZ) / (tipZ - rootZ), y / hull.height);
+        plate.positions.push(x + side * offset, y, z);
+        plate.uvs.push((z - rootZ) / (tipZ - rootZ), y / hull.height);
       }
     }
     // Two faces plus the four edges of the plate.
@@ -137,8 +181,11 @@ function buildFins(hull: HullSpec): BufferGeometry {
       [3, 7, 4, 0],
     ];
     for (const [a, b, c, d] of quads) {
-      sweep.indices.push(base + a, base + b, base + c, base + a, base + c, base + d);
+      plate.indices.push(a, b, c, a, c, d);
     }
+
+    ensureOutwardWinding(plate);
+    appendSweep(sweep, plate);
   }
 
   return toGeometry(sweep);
@@ -281,6 +328,9 @@ export class GliderModel {
    */
   private bodyMaterial(base: Color, block: Color, accent: Color): MeshStandardNodeMaterial {
     const material = new MeshStandardNodeMaterial();
+    // The fins are thin plates; from a grazing angle a single-sided one
+    // disappears entirely.
+    material.side = DoubleSide;
     const around = uv().x;
     const along = uv().y;
 
@@ -314,6 +364,8 @@ export class GliderModel {
    */
   private static canopyMaterial(): MeshPhysicalNodeMaterial {
     const material = new MeshPhysicalNodeMaterial();
+    // An open half-dome: there is no back face to cull, only a missing one.
+    material.side = DoubleSide;
     material.colorNode = color(0x7d93a6);
     material.roughnessNode = float(0.05);
     material.metalnessNode = float(1);
@@ -327,6 +379,9 @@ export class GliderModel {
   /** Nozzle glow, driven by thrust and blown out by boost. */
   private thrusterMaterial(accent: Color): MeshStandardNodeMaterial {
     const material = new MeshStandardNodeMaterial();
+    // Open tubes. Culled to one side they were visible from inside the craft
+    // and missing from behind it, which is the wrong way round.
+    material.side = DoubleSide;
     const depth = uv().y;
     const heat = this.thrustUniform.mul(0.7).add(this.boostUniform.mul(3.4)).add(0.18);
     material.colorNode = mix(color(0x0b0d10), vec3(accent.r, accent.g, accent.b), depth);

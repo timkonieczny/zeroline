@@ -79,7 +79,7 @@ export class OptionList extends Group {
         pixelRatio,
       );
       value.position.set(this.width - 44, 0, 0);
-      value.setColour(palette.accent);
+      value.setColour(palette.ink);
 
       const left = new TextMesh('‹', { size: 20, tracking: 0, align: 'centre' }, pixelRatio);
       const right = new TextMesh('›', { size: 20, tracking: 0, align: 'centre' }, pixelRatio);
@@ -125,6 +125,7 @@ export class OptionList extends Group {
   private refresh(): void {
     for (const entry of this.rows) {
       entry.value.setText(entry.row.choices[entry.row.index] ?? '');
+      entry.value.setColour(this.palette.ink);
       // Only show a chevron where there is actually somewhere to go.
       entry.left.setOpacity(entry.row.index > 0 ? 1 : 0.15);
       entry.right.setOpacity(entry.row.index < entry.row.choices.length - 1 ? 1 : 0.15);
@@ -139,9 +140,9 @@ export class OptionList extends Group {
     this.rows.forEach((entry, i) => {
       const nearness = clamp(1 - Math.abs(i - this.shownIndex), 0, 1);
       entry.group.position.x = lerp(0, 14, nearness);
-      entry.label.setColour(i === this.index ? this.palette.ink : this.palette.dim, 1);
-      entry.label.setOpacity(lerp(0.88, 1, nearness));
-      entry.value.setOpacity(lerp(0.8, 1, nearness));
+      entry.label.setColour(i === this.index ? this.palette.accent : this.palette.ink, 1);
+      entry.label.setOpacity(1);
+      entry.value.setOpacity(1);
       const chevron = i === this.index ? 1 : 0;
       entry.left.scale.setScalar(lerp(0.85, 1, chevron));
       entry.right.scale.setScalar(lerp(0.85, 1, chevron));

@@ -1,4 +1,4 @@
-import { BackSide, Group, Mesh, type BufferGeometry } from 'three';
+import { DoubleSide, Group, Mesh, type BufferGeometry } from 'three';
 import { MeshStandardNodeMaterial } from 'three/webgpu';
 import {
   abs,
@@ -345,7 +345,9 @@ export class TrackMesh {
     material.colorNode = mix(color(0x1a1f24), color(0x2b3239), around.sub(0.5).abs().mul(2));
     material.emissiveNode = mix(accent.xyz.mul(0.6), vec3(1, 0.96, 0.9), float(0.7)).mul(lights).mul(5);
     material.roughnessNode = float(0.62);
-    material.side = BackSide; // We are inside the tube.
+    // Both sides: the road runs inside the tube, but the tube's outside is
+    // visible on approach and from the elevated sections above it.
+    material.side = DoubleSide;
     return material;
   }
 }

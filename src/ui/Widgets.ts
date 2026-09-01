@@ -118,9 +118,11 @@ export class ListMenu extends Group {
       const nearness = clamp(1 - Math.abs(i - shown), 0, 1);
       row.group.position.x = lerp(0, 14, nearness);
       const selected = i === this.index;
-      row.label.setColour(row.locked ? this.palette.muted : selected ? this.palette.ink : this.palette.dim, 1);
-      row.label.setOpacity(row.locked ? 0.55 : lerp(0.88, 1, nearness));
-      row.detail?.setOpacity(lerp(0.78, 1, nearness));
+      // Selected is blue, everything else is the one dark grey. Dimming the
+      // rest as well made the list read as mostly disabled.
+      row.label.setColour(row.locked ? this.palette.muted : selected ? this.palette.accent : this.palette.ink, 1);
+      row.label.setOpacity(row.locked ? 0.55 : 1);
+      row.detail?.setOpacity(1);
     });
   }
 

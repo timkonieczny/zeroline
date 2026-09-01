@@ -43,11 +43,14 @@ export const DARK_UI: UiPalette = {
  * decorative rather than readable.
  */
 export const LIGHT_UI: UiPalette = {
-  ink: 0x121a21,
-  dim: 0x51606d,
-  muted: 0xa8b3bd,
+  // One dark grey for everything at rest, and the blue purely for what is
+  // selected. Three tones on a white set meant a third of the interface was
+  // always the least legible thing on screen for no reason anyone could see.
+  ink: 0x243039,
+  dim: 0x243039,
+  muted: 0x9aa6b1,
   accent: 0x0072a8,
   highlight: 0x0072a8,
-  highlightAlpha: 0.12,
-  rule: 0xc3ccd4,
+  highlightAlpha: 0.14,
+  rule: 0xbac4cc,
 };

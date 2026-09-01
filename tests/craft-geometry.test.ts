@@ -1,0 +1,91 @@
+import { describe, expect, it } from 'vitest';
+import { Vector3 } from 'three';
+import { buildFins, buildHull } from '@/game/GliderModel';
+import { TEAMS } from '@/data/teams';
+import type { BufferGeometry } from 'three';
+
+/**
+ * Signed volume of a closed mesh.
+ *
+ * Positive when the faces wind counter-clockwise seen from outside — which is
+ * what backface culling and `computeVertexNormals` both assume. Negative means
+ * the shell is inside-out, and an inside-out craft is one you can see through.
+ */
+function signedVolume(geometry: BufferGeometry): number {
+  const position = geometry.getAttribute('position');
+  const index = geometry.getIndex()!;
+  const a = new Vector3();
+  const b = new Vector3();
+  const c = new Vector3();
+  let volume = 0;
+  for (let i = 0; i < index.count; i += 3) {
+    a.fromBufferAttribute(position, index.getX(i));
+    b.fromBufferAttribute(position, index.getX(i + 1));
+    c.fromBufferAttribute(position, index.getX(i + 2));
+    volume += a.dot(new Vector3().crossVectors(b, c)) / 6;
+  }
+  return volume;
+}
+
+/** Fraction of faces whose normal points away from the shape's own centre. */
+function outwardFraction(geometry: BufferGeometry): number {
+  const position = geometry.getAttribute('position');
+  const index = geometry.getIndex()!;
+  const centre = new Vector3();
+  for (let i = 0; i < position.count; i++) {
+    centre.add(new Vector3().fromBufferAttribute(position, i));
+  }
+  centre.divideScalar(position.count);
+
+  const a = new Vector3();
+  const b = new Vector3();
+  const c = new Vector3();
+  const normal = new Vector3();
+  const midpoint = new Vector3();
+  let outward = 0;
+  let total = 0;
+
+  for (let i = 0; i < index.count; i += 3) {
+    a.fromBufferAttribute(position, index.getX(i));
+    b.fromBufferAttribute(position, index.getX(i + 1));
+    c.fromBufferAttribute(position, index.getX(i + 2));
+    normal.crossVectors(b.clone().sub(a), c.clone().sub(a));
+    if (normal.lengthSq() < 1e-12) continue;
+    midpoint.copy(a).add(b).add(c).divideScalar(3).sub(centre);
+    if (normal.dot(midpoint) > 0) outward++;
+    total++;
+  }
+  return total > 0 ? outward / total : 0;
+}
+
+describe('craft geometry', () => {
+  it.each(TEAMS.map((team) => [team.name, team] as const))(
+    '%s has a hull that faces outward',
+    (_name, team) => {
+      const geometry = buildHull(team.hull);
+      expect(signedVolume(geometry)).toBeGreaterThan(0);
+      // A swept hull is convex enough that essentially every face should agree.
+      expect(outwardFraction(geometry)).toBeGreaterThan(0.95);
+    },
+  );
+
+  it.each(TEAMS.map((team) => [team.name, team] as const))(
+    '%s has fins that face outward',
+    (_name, team) => {
+      expect(signedVolume(buildFins(team.hull))).toBeGreaterThan(0);
+    },
+  );
+
+  it('builds a closed hull with no degenerate faces', () => {
+    for (const team of TEAMS) {
+      const geometry = buildHull(team.hull);
+      const position = geometry.getAttribute('position');
+      for (let i = 0; i < position.count; i++) {
+        expect(Number.isFinite(position.getX(i))).toBe(true);
+        expect(Number.isFinite(position.getY(i))).toBe(true);
+        expect(Number.isFinite(position.getZ(i))).toBe(true);
+      }
+      expect(geometry.getIndex()!.count % 3).toBe(0);
+    }
+  });
+});

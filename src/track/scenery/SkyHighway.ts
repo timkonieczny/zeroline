@@ -9,8 +9,74 @@ const LANES = 5;
 const PER_LANE = 46;
 /** Length of each lane, in metres. */
 const LANE_LENGTH = 3400;
+/** Lowest lane's height above the circuit datum, in metres. */
+const BASE_ALTITUDE = 74;
+/** Metres between one lane and the next. */
+const LANE_RISE = 20;
+/** Metres between lanes, measured across the lattice. */
+const LANE_SPACING = 210;
+/**
+ * Half-width of the corridor a lane needs kept clear, in metres.
+ *
+ * The craft themselves are a few metres across; the rest is the margin that
+ * keeps a tower from appearing to clip one as it passes.
+ */
+export const LANE_HALF_WIDTH = 16;
+/** Vertical air demanded between a lane and anything under it. */
+export const LANE_CLEARANCE = 22;
 
 const _centre = new Vector3();
+
+/** One lane of sky traffic, as a straight line in the ground plane. */
+export interface SkyLane {
+  /** A point the lane passes through. */
+  originX: number;
+  originZ: number;
+  /** Unit direction along the lane. */
+  dirX: number;
+  dirZ: number;
+  /** Height above the circuit datum. */
+  altitude: number;
+}
+
+/** Rough centroid of the circuit, so the lanes span it rather than the origin. */
+function trackCentre(track: Track, out: Vector3): Vector3 {
+  const sum = new Vector3();
+  const point = new Vector3();
+  const samples = 32;
+  for (let i = 0; i < samples; i++) {
+    sum.add(track.spline.positionOfSample(Math.floor((i / samples) * track.spline.count), point));
+  }
+  return out.copy(sum).divideScalar(samples);
+}
+
+/**
+ * Where the traffic lanes run, on the CPU.
+ *
+ * The shader derives this arithmetically from the instance index; this returns
+ * the same lattice so the skyline can be built around it. Lowering the highway
+ * to where it is actually visible put it straight through the tops of the tall
+ * towers, and the cheapest honest fix is to let the city know where the traffic
+ * is and duck under it.
+ */
+export function skyHighwayLanes(track: Track): SkyLane[] {
+  const centre = trackCentre(track, new Vector3());
+  const lanes: SkyLane[] = [];
+  for (let lane = 0; lane < LANES; lane++) {
+    const heading = lane * 0.74 + 0.35;
+    const dirX = Math.cos(heading);
+    const dirZ = Math.sin(heading);
+    const sideways = (lane - (LANES - 1) / 2) * LANE_SPACING;
+    lanes.push({
+      originX: centre.x + -dirZ * sideways,
+      originZ: centre.z + dirX * sideways,
+      dirX,
+      dirZ,
+      altitude: lane * LANE_RISE + BASE_ALTITUDE,
+    });
+  }
+  return lanes;
+}
 
 /**
  * Commuter traffic in the sky above the circuit.
@@ -33,15 +99,7 @@ export class SkyHighway {
   private readonly centre = uniform(new Vector3());
 
   constructor(track: Track) {
-    // Rough centroid of the circuit, so the lanes span it.
-    const sum = new Vector3();
-    const point = new Vector3();
-    const samples = 32;
-    for (let i = 0; i < samples; i++) {
-      sum.add(track.spline.positionOfSample(Math.floor((i / samples) * track.spline.count), point));
-    }
-    _centre.copy(sum).divideScalar(samples);
-    this.centre.value.copy(_centre);
+    this.centre.value.copy(trackCentre(track, _centre));
 
     // A squashed octahedron reads as a distant craft from any angle.
     const geometry = new OctahedronGeometry(1, 0);
@@ -81,8 +139,11 @@ export class SkyHighway {
 
     // Heading, altitude and lateral offset spread the lanes into a lattice.
     const heading = lane.mul(0.74).add(0.35);
-    const altitude = lane.mul(34).add(96);
-    const sideways = lane.sub((LANES - 1) / 2).mul(210);
+    // Low enough to be part of the city rather than a detail in the sky. The
+    // skyline is clipped out of these corridors rather than the other way
+    // round — see `skyHighwayLanes`.
+    const altitude = lane.mul(LANE_RISE).add(BASE_ALTITUDE);
+    const sideways = lane.sub((LANES - 1) / 2).mul(LANE_SPACING);
     const speed = lane.mul(7).add(34);
 
     const dirX = cos(heading);

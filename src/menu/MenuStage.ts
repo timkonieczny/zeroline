@@ -5,6 +5,7 @@ import {
   DirectionalLight,
   Fog,
   Group,
+  DoubleSide,
   Mesh,
   OrthographicCamera,
   PerspectiveCamera,
@@ -34,6 +35,7 @@ import {
   vec3,
 } from 'three/tsl';
 import { createFloorSurface } from './FloorSurface';
+import { GarageProps } from './GarageProps';
 import { LIGHT_UI } from '@/ui/Palette';
 import { TextMesh, panelMaterial } from '@/ui/Text';
 import { ListMenu, StatBar } from '@/ui/Widgets';
@@ -59,8 +61,18 @@ export interface MenuSelection {
 const MARGIN = 74;
 const UI = LIGHT_UI;
 
-/** The showroom's walls and haze. */
+/** The garage's walls and haze. */
 const ROOM_WHITE = 0xeef3f7;
+/** Interior size of the bay, in metres. */
+const ROOM_WIDTH = 46;
+const ROOM_DEPTH = 60;
+const ROOM_HEIGHT = 13.5;
+/** Padding between a ceiling strip's ends and the walls. */
+const STRIP_PADDING = 5;
+/** Ceiling strips, laid diagonally across the bay. */
+const STRIP_COUNT = 4;
+/** Strip width in metres. Half what the old overhead runs were. */
+const STRIP_WIDTH = 1.2;
 /**
  * How much of the floor is mirror at the plinth, dry and wet. Both fall off
  * with distance: a mirror running to the horizon reads as a bug.
@@ -68,9 +80,9 @@ const ROOM_WHITE = 0xeef3f7;
 const FLOOR_MIRROR_DRY = 0.3;
 const FLOOR_MIRROR_WET = 0.75;
 /** How many times the floor's surface map repeats across the plane. */
-const FLOOR_TILING = 55;
+const FLOOR_TILING = 26;
 /** How much larger the puddles are than the tiles. */
-const PUDDLE_SCALE = 9;
+const PUDDLE_SCALE = 5.5;
 
 /**
  * Where the plinth stands. Off to the right so the type, which is set flush
@@ -88,7 +100,9 @@ const STATIONS: Record<MenuScreen, { position: [number, number, number]; look: [
   title: { position: [13, 4.6, 21], look: [-9, 2.4, 0], fov: 32 },
   main: { position: [10, 3.8, 18], look: [-6.5, 2.2, 0], fov: 34 },
   track: { position: [9, 7.0, 17], look: [-6.5, 1.8, 0], fov: 36 },
-  craft: { position: [5.5, 3.4, 21], look: [-7.5, 2.3, 0], fov: 27 },
+  // Further back and less biased than the others: this is the only screen
+  // where the whole hull has to fit, and it was running off the right edge.
+  craft: { position: [5.5, 3.6, 31], look: [-4.5, 2.3, 0], fov: 25 },
   class: { position: [7, 3.4, 17], look: [-5.6, 2.3, 0], fov: 32 },
   controls: { position: [11, 4.0, 19], look: [-6.5, 2.3, 0], fov: 36 },
   settings: { position: [11, 5.6, 19], look: [-6.5, 2.6, 0], fov: 36 },
@@ -106,6 +120,34 @@ const PAN_RISE = 0.16;
 const WORLD_UP = new Vector3(0, 1, 0);
 const _from = new Vector3();
 const _to = new Vector3();
+/**
+ * How long a line at the given perpendicular offset is inside the ceiling.
+ *
+ * The ceiling is a rectangle and the strips run across it at an angle, so the
+ * span available shrinks as a strip moves out towards a corner.
+ */
+function chordLength(offset: number, angle: number): number {
+  const dirX = Math.cos(angle);
+  const dirZ = -Math.sin(angle);
+  // A point on the line, offset perpendicular to it from the ceiling's centre.
+  const baseX = -dirZ * offset;
+  const baseZ = dirX * offset;
+
+  let enter = -Infinity;
+  let exit = Infinity;
+  const slab = (position: number, direction: number, half: number): boolean => {
+    if (Math.abs(direction) < 1e-6) return Math.abs(position) <= half;
+    const a = (-half - position) / direction;
+    const b = (half - position) / direction;
+    enter = Math.max(enter, Math.min(a, b));
+    exit = Math.min(exit, Math.max(a, b));
+    return true;
+  };
+  if (!slab(baseX, dirX, ROOM_WIDTH / 2)) return 0;
+  if (!slab(baseZ, dirZ, ROOM_DEPTH / 2)) return 0;
+  return Math.max(0, exit - enter);
+}
+
 const _stationPosition = new Vector3();
 const _stationLook = new Vector3();
 const _currentLook = new Vector3();
@@ -141,6 +183,7 @@ export class MenuStage {
   private readonly mirror: ReturnType<typeof reflector>;
   /** Normal map plus puddle mask for the floor. */
   private readonly floorSurface: Texture;
+  private readonly props: GarageProps;
   /** Image-based lighting probe, so the craft has something to reflect. */
   private environmentMap: Texture | null = null;
   private readonly craftHolder = new Group();
@@ -190,14 +233,15 @@ export class MenuStage {
     // --- Showroom -------------------------------------------------------
     // Linear fog to white rather than exponential to black: the room has no
     // far wall, and everything simply dissolves into the light.
-    this.scene.fog = new Fog(ROOM_WHITE, 46, 190);
+    this.scene.fog = new Fog(ROOM_WHITE, 60, 210);
 
-    // A graded backdrop rather than a flat fill. On a white set a white craft
-    // has no edge anywhere; the floor needs to sit a few stops under the
-    // ceiling for the silhouette to read at all.
+    // A real room now: glossy white walls and ceiling, closed at the back.
+    // The graded dome behind it still does the work of separating a white
+    // craft from a white set — a closed box alone gives the hull no edge.
     const backdrop = new Mesh(new SphereGeometry(220, 32, 20), MenuStage.backdropMaterial());
     backdrop.frustumCulled = false;
     this.scene.add(backdrop);
+    this.scene.add(MenuStage.buildRoom());
 
     // A planar reflection of the whole scene, which is what puts the craft
     // back on the floor underneath itself. Half resolution: it is a soft,
@@ -226,8 +270,12 @@ export class MenuStage {
 
     // A hard key for the shadow under the craft, and a broad directional
     // fill so nothing on a white set falls into darkness.
-    const key = new SpotLight(0xffffff, 900, 90, 0.62, 0.55, 1.4);
-    key.position.copy(PLINTH).add(new Vector3(8, 16, 9));
+    // Softer than it was on the open set: white walls bounce most of it back.
+    const key = new SpotLight(0xffffff, 620, 90, 0.62, 0.55, 1.4);
+    // Behind the plinth rather than on the camera's side of it: a polished
+    // podium mirrors a key light straight down the lens, and the hotspot was
+    // blooming out everything under the craft.
+    key.position.copy(PLINTH).add(new Vector3(9, 16, -7));
     key.target.position.copy(PLINTH).setY(2);
     key.castShadow = true;
     key.shadow.mapSize.set(2048, 2048);
@@ -239,8 +287,9 @@ export class MenuStage {
     const back = new DirectionalLight(new Color(UI.accent), 0.55);
     back.position.copy(PLINTH).add(new Vector3(-8, 5, -12));
 
+    this.props = new GarageProps(PLINTH);
     this.scene.add(floor, this.plinth, key, key.target, fill, back);
-    this.scene.add(MenuStage.buildSoftboxes());
+    this.scene.add(MenuStage.buildSoftboxes(), this.props.group);
 
     // --- Overlay --------------------------------------------------------
     const t = (
@@ -256,25 +305,27 @@ export class MenuStage {
     this.pressStart = t('Press Enter or A to begin', 14, 0.34, 'left');
     this.wordmark.setColour(UI.ink);
     this.tagline.setColour(UI.ink);
-    this.pressStart.setColour(UI.accent);
+    // Dark grey like every other resting label. It pulses, which is what
+    // draws the eye; colouring it as well only cost legibility.
+    this.pressStart.setColour(UI.ink);
 
     this.breadcrumb = t('', 12, 0.4, 'left');
     this.breadcrumb.setColour(UI.ink);
     this.hint = t('', 11, 0.36, 'right');
-    this.hint.setColour(UI.dim);
+    this.hint.setColour(UI.ink);
 
     this.craftName = t('', 36, 0.18, 'left', true);
     this.craftNation = new TextMesh('', { size: 12, tracking: 0.44, align: 'left', upper: true }, pixelRatio);
     this.craftBlurb = t('', 14, 0.04, 'left');
     this.craftName.setColour(UI.ink);
-    this.craftNation.setColour(UI.accent);
+    this.craftNation.setColour(UI.ink);
     this.craftBlurb.setColour(UI.ink);
 
     this.trackTitle = t('', 42, 0.16, 'left', true);
     this.trackSubtitle = t('', 13, 0.4, 'left');
     this.trackFacts = t('', 14, 0.12, 'left');
     this.trackTitle.setColour(UI.ink);
-    this.trackSubtitle.setColour(UI.accent);
+    this.trackSubtitle.setColour(UI.ink);
     this.trackFacts.setColour(UI.ink);
 
     this.classBlurb = t('', 14, 0.04, 'left');
@@ -655,6 +706,7 @@ export class MenuStage {
   }
 
   dispose(): void {
+    this.props.dispose();
     this.floorSurface.dispose();
     this.environmentMap?.dispose();
     this.craftModel?.dispose();
@@ -676,9 +728,10 @@ export class MenuStage {
     const material = new MeshStandardNodeMaterial();
     const surface = this.floorSurface;
 
-    // Tiled several times across a 400 m plane, so the tiles are tile-sized.
+    // Tiled across a 400 m plane. Doubled in size from the first pass: at the
+    // old scale the repeat was plainly visible as wallpaper.
     const tiled = uv().mul(FLOOR_TILING);
-    const grid = uv().mul(80);
+    const grid = uv().mul(40);
     const lineX = smoothstep(float(0.02), float(0), fract(grid.x).sub(0.5).abs().oneMinus().sub(0.985));
     const lineY = smoothstep(float(0.02), float(0), fract(grid.y).sub(0.5).abs().oneMinus().sub(0.985));
     const radius = uv().sub(0.5).length();
@@ -713,8 +766,11 @@ export class MenuStage {
     // Polished enough to hold the strip lights and a smear of the craft above
     // it, via the studio probe.
     material.colorNode = color(0xb6c1cb);
-    material.roughnessNode = float(0.08);
-    material.metalnessNode = float(0.85);
+    // Glossy, not a mirror. Once the room was closed in white, a near-perfect
+    // plinth reflected the ceiling straight into the lens and bloomed half the
+    // frame out.
+    material.roughnessNode = float(0.22);
+    material.metalnessNode = float(0.6);
     return material;
   }
 
@@ -745,17 +801,64 @@ export class MenuStage {
     material.colorNode = color(0xffffff);
     // Brightest along the middle of the panel and softer at its edges.
     const across = oneMinus(uv().y.sub(0.5).abs().mul(2));
-    material.emissiveNode = color(0xffffff).mul(smoothstep(float(0), float(0.45), across)).mul(3.2);
+    material.emissiveNode = color(0xffffff).mul(smoothstep(float(0), float(0.45), across)).mul(2.2);
     material.fog = false;
 
-    // One continuous run per side. Five separate panels at a grazing angle
-    // overlapped into a dashed, stepped mess that read as z-fighting.
-    for (const side of [-1, 1]) {
-      const panel = new Mesh(new PlaneGeometry(2.4, 108), material);
-      panel.position.set(PLINTH.x + side * 9.5, 12.5, -34);
-      panel.rotation.x = Math.PI / 2;
+    // Four runs laid diagonally across the bay, almost corner to corner. A
+    // diagonal reads as a designed ceiling rather than as a corridor, and it
+    // drags a long highlight across the hull as the camera pans.
+    const angle = Math.atan2(ROOM_DEPTH, ROOM_WIDTH);
+    for (let i = 0; i < STRIP_COUNT; i++) {
+      // Spread perpendicular to the run, so the spacing is even on the ceiling
+      // rather than even along one axis.
+      const offset = (i - (STRIP_COUNT - 1) / 2) * (ROOM_WIDTH / STRIP_COUNT) * 1.5;
+      // Each strip is cut to the chord it actually has. The outer two cross a
+      // corner of the ceiling rather than the whole diagonal, and at one shared
+      // length they ran straight out through the walls.
+      const length = chordLength(offset, angle) - STRIP_PADDING * 2;
+      if (length <= 1) continue;
+      const panel = new Mesh(new PlaneGeometry(STRIP_WIDTH, length), material);
+      panel.position.set(
+        PLINTH.x + Math.cos(angle) * offset,
+        ROOM_HEIGHT - 0.35,
+        -ROOM_DEPTH / 2 + 8 - Math.sin(angle) * offset,
+      );
+      panel.rotation.set(Math.PI / 2, 0, -angle);
       group.add(panel);
     }
+    return group;
+  }
+
+  /**
+   * The bay: floor-to-ceiling white, closed behind and to the sides.
+   *
+   * Drawn double-sided so the camera can sit outside a wall on the wider
+   * stations without the room turning inside-out around it.
+   */
+  private static buildRoom(): Group {
+    const group = new Group();
+    const wall = new MeshStandardNodeMaterial();
+    wall.colorNode = color(0xf1f5f8);
+    wall.roughnessNode = float(0.16);
+    wall.metalnessNode = float(0.06);
+    wall.side = DoubleSide;
+
+    const ceiling = new Mesh(new PlaneGeometry(ROOM_WIDTH, ROOM_DEPTH), wall);
+    ceiling.rotation.x = Math.PI / 2;
+    ceiling.position.set(PLINTH.x, ROOM_HEIGHT, -ROOM_DEPTH / 2 + 8);
+    group.add(ceiling);
+
+    const back = new Mesh(new PlaneGeometry(ROOM_WIDTH, ROOM_HEIGHT), wall);
+    back.position.set(PLINTH.x, ROOM_HEIGHT / 2, -ROOM_DEPTH + 8);
+    group.add(back);
+
+    for (const side of [-1, 1] as const) {
+      const panel = new Mesh(new PlaneGeometry(ROOM_DEPTH, ROOM_HEIGHT), wall);
+      panel.rotation.y = -side * Math.PI / 2;
+      panel.position.set(PLINTH.x + side * ROOM_WIDTH / 2, ROOM_HEIGHT / 2, -ROOM_DEPTH / 2 + 8);
+      group.add(panel);
+    }
+
     return group;
   }
 
@@ -783,12 +886,14 @@ export class MenuStage {
       studio.add(panel);
     }
 
-    // The two overhead runs, so anything glossy carries them as long streaks
-    // rather than as four anonymous blobs.
-    for (const side of [-1, 1]) {
-      const strip = new Mesh(new PlaneGeometry(2.4, 90), boxMaterial);
-      strip.position.set(side * 9.5, 12.5, 0);
-      strip.rotation.x = Math.PI / 2;
+    // The diagonal ceiling runs, so anything glossy carries them as long
+    // streaks rather than as four anonymous blobs.
+    const angle = Math.atan2(ROOM_DEPTH, ROOM_WIDTH);
+    for (let i = 0; i < STRIP_COUNT; i++) {
+      const offset = (i - (STRIP_COUNT - 1) / 2) * (ROOM_WIDTH / STRIP_COUNT) * 1.5;
+      const strip = new Mesh(new PlaneGeometry(STRIP_WIDTH * 1.6, 70), boxMaterial);
+      strip.position.set(Math.cos(angle) * offset, ROOM_HEIGHT - 0.35, -Math.sin(angle) * offset);
+      strip.rotation.set(Math.PI / 2, 0, -angle);
       studio.add(strip);
     }
 

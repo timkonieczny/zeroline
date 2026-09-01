@@ -22,7 +22,7 @@ import type { Track } from '../Track';
 /** Radius of the sky dome. Must sit inside the camera's far plane. */
 const SKY_RADIUS = 4200;
 /** Height of the sea below the circuit's datum, in metres. */
-const SEA_LEVEL = -26;
+export const SEA_LEVEL = -26;
 /** Shadow map resolution per cascade. */
 const SHADOW_SIZE = 2048;
 /** Half-extent of the sun's shadow frustum around the player, in metres. */
