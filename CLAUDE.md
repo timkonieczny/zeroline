@@ -11,7 +11,7 @@ npm run dev        # Vite dev server on http://127.0.0.1:5173
 npm run build      # typecheck + production build
 npm test           # Vitest, headless, no GPU
 npm run typecheck  # tsc --noEmit
-npm run lint
+npm run lint      # ESLint 9 flat config; type-aware, and deliberately few rules
 
 npx vite-node scripts/inspect-track.ts   # circuit geometry report: corners, curvature, gradient
 npx vite-node scripts/hotlap.ts          # headless lap times for every team

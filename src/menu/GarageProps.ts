@@ -4,7 +4,7 @@ import {
   Group,
   Mesh,
   TorusGeometry,
-  Vector3,
+  type Vector3,
 } from 'three';
 import { MeshStandardNodeMaterial } from 'three/webgpu';
 import { color, float } from 'three/tsl';

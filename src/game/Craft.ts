@@ -1,4 +1,4 @@
-import { Matrix4, Quaternion, Vector3 } from 'three';
+import { Matrix4, type Quaternion, Vector3 } from 'three';
 import type { Team } from '@/data/teams';
 import { buildHandling, type HandlingProfile, type SpeedClass } from './Handling';
 import { createInputSnapshot, type InputSnapshot } from './InputSnapshot';
