@@ -84,6 +84,8 @@ export class App {
   private mode: Mode = 'menu';
   /** Seconds since the race finished, used to hold the classification up. */
   private finishedFor = 0;
+  /** Held so its choices can be rebuilt when the window changes. */
+  private resolutionRow: OptionRow | null = null;
   /** True while the curtain is down, which suspends input and the sim. */
   private transitioning = false;
   /** True while the pause panel is up. */
@@ -152,6 +154,7 @@ export class App {
     window.addEventListener('keydown', this.onKeyDown);
     this.onResize();
 
+    this.renderer.setBaseScale(this.settings.resolutionScale);
     this.renderer.setAdaptive(this.settings.adaptiveResolution, this.settings.targetFps);
     this.loop.start();
   }
@@ -160,7 +163,19 @@ export class App {
     const ratio = this.pixelRatio();
     this.menu.resize(window.innerWidth, window.innerHeight, ratio);
     this.race?.resize(window.innerWidth, window.innerHeight, ratio);
+    // The resolution row's choices are the window's own sizes, so they are
+    // wrong the moment the window is not that size any more.
+    this.refreshResolutionRow();
   };
+
+  /** Rebuilds the resolution row's choices from the window as it is now. */
+  private refreshResolutionRow(): void {
+    if (!this.resolutionRow) return;
+    const ladder = this.renderer.ladder();
+    this.resolutionRow.choices = ladder.map((rung) => rung.label);
+    this.resolutionRow.index = this.renderer.currentRung();
+    this.menu?.refreshSettings();
+  }
 
   private readonly onKeyDown = (event: KeyboardEvent): void => {
     if (event.code === 'F3') {
@@ -466,6 +481,11 @@ export class App {
         choices: qualities,
         index: Math.max(0, QUALITY_ORDER.indexOf(this.settings.quality)),
       },
+      (this.resolutionRow = {
+        label: 'Resolution',
+        choices: this.renderer.ladder().map((rung) => rung.label),
+        index: this.renderer.currentRung(),
+      }),
       {
         label: 'Antialiasing',
         // SMAA stays shouted: it is an acronym, not a word.
@@ -508,6 +528,14 @@ export class App {
       case 'Effects volume':
         this.applySettings({ mix: { ...this.settings.mix, effects: row.index / 10 } });
         break;
+      case 'Resolution': {
+        const rung = this.renderer.ladder()[row.index];
+        if (rung) {
+          this.renderer.setBaseScale(rung.scale);
+          this.applySettings({ resolutionScale: rung.scale });
+        }
+        break;
+      }
       case 'Music volume':
         this.applySettings({ mix: { ...this.settings.mix, music: row.index / 10 } });
         break;

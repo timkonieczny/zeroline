@@ -122,6 +122,17 @@ export class OptionList extends Group {
     return true;
   }
 
+  /**
+   * Re-reads every row's current choice.
+   *
+   * For rows whose choices are not fixed: the resolution row's are built from
+   * the window and the display's pixel ratio, so they change when the window is
+   * resized or moved to another monitor.
+   */
+  refreshValues(): void {
+    this.refresh();
+  }
+
   private refresh(): void {
     for (const entry of this.rows) {
       entry.value.setText(entry.row.choices[entry.row.index] ?? '');

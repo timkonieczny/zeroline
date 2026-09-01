@@ -1,3 +1,4 @@
+import { nearestRung, resolutionLadder, type ResolutionRung } from './ResolutionLadder';
 import { ACESFilmicToneMapping, PerspectiveCamera, WebGPURenderer } from 'three/webgpu';
 import { clamp } from './math';
 
@@ -40,8 +41,16 @@ export class Renderer {
   readonly renderer: WebGPURenderer;
   readonly camera: PerspectiveCamera;
 
-  /** Dynamic resolution multiplier, 0.55..1. */
-  private scale = 1;
+  /**
+   * The player's chosen ceiling, from the resolution setting.
+   *
+   * Kept apart from the adaptive multiplier so the two compose rather than
+   * fight: this is the most the game will ever render at, and the scaler moves
+   * underneath it.
+   */
+  private baseScale = 1;
+  /** Dynamic resolution multiplier, 0.55..1, applied under `baseScale`. */
+  private adaptiveScale = 1;
   /** Target frame time in seconds that the adaptive scaler aims for. */
   private budget = 1 / 60;
   private adaptive = false;
@@ -211,7 +220,7 @@ export class Renderer {
   private applySize(): void {
     const width = window.innerWidth;
     const height = window.innerHeight;
-    this.renderer.setPixelRatio(this.currentDpr * this.scale);
+    this.renderer.setPixelRatio(this.currentDpr * this.baseScale * this.adaptiveScale);
     this.renderer.setSize(width, height, true);
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
@@ -221,13 +230,27 @@ export class Renderer {
   setAdaptive(enabled: boolean, targetFps = 60): void {
     this.adaptive = enabled;
     this.budget = 1 / targetFps;
+    // Only the scaler's own multiplier is reset. The player's ceiling is not
+    // the scaler's to give back.
     if (!enabled) this.setResolutionScale(1);
+  }
+
+  /**
+   * Sets the resolution the game renders at, as a multiplier on the display's
+   * pixel density. 1 is the display's real pixels; `1 / devicePixelRatio` is
+   * the CSS size.
+   */
+  setBaseScale(scale: number): void {
+    const next = clamp(scale, MIN_SCALE, 1);
+    if (Math.abs(next - this.baseScale) < 0.005) return;
+    this.baseScale = next;
+    this.applySize();
   }
 
   setResolutionScale(scale: number): void {
     const next = clamp(scale, MIN_SCALE, 1);
-    if (Math.abs(next - this.scale) < 0.005) return;
-    this.scale = next;
+    if (Math.abs(next - this.adaptiveScale) < 0.005) return;
+    this.adaptiveScale = next;
     this.applySize();
   }
 
@@ -245,8 +268,8 @@ export class Renderer {
     this.frameTimeSum = 0;
     this.frameTimeCount = 0;
 
-    if (average > this.budget * 1.12) this.setResolutionScale(this.scale - 0.06);
-    else if (average < this.budget * 0.82) this.setResolutionScale(this.scale + 0.03);
+    if (average > this.budget * 1.12) this.setResolutionScale(this.adaptiveScale - 0.06);
+    else if (average < this.budget * 0.82) this.setResolutionScale(this.adaptiveScale + 0.03);
   }
 
   /**
@@ -291,14 +314,25 @@ export class Renderer {
     return this.lastGpuMs;
   }
 
+  /** The resolutions this display can offer, lowest first. */
+  ladder(): ResolutionRung[] {
+    return resolutionLadder(window.innerWidth, window.innerHeight, this.currentDpr);
+  }
+
+  /** Which rung the current ceiling sits on. */
+  currentRung(): number {
+    return nearestRung(this.ladder(), this.baseScale);
+  }
+
   get stats(): RendererStats {
     const context = this.renderer.getContext() as { drawingBufferWidth?: number; drawingBufferHeight?: number };
     return {
-      drawingBufferWidth: context?.drawingBufferWidth ?? Math.round(window.innerWidth * this.currentDpr * this.scale),
+      drawingBufferWidth:
+        context?.drawingBufferWidth ?? Math.round(window.innerWidth * this.currentDpr * this.baseScale * this.adaptiveScale),
       drawingBufferHeight:
-        context?.drawingBufferHeight ?? Math.round(window.innerHeight * this.currentDpr * this.scale),
+        context?.drawingBufferHeight ?? Math.round(window.innerHeight * this.currentDpr * this.baseScale * this.adaptiveScale),
       devicePixelRatio: this.currentDpr,
-      resolutionScale: this.scale,
+      resolutionScale: this.baseScale * this.adaptiveScale,
       backend: (this.renderer.backend as { isWebGPUBackend?: boolean } | undefined)?.isWebGPUBackend
         ? 'webgpu'
         : 'webgl',

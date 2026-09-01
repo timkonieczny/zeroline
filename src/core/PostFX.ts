@@ -11,6 +11,7 @@ import {
   convertToTexture,
   dot,
   float,
+  int,
   mix,
   mrt,
   output,
@@ -23,13 +24,12 @@ import {
   velocity,
 } from 'three/tsl';
 import { bloom } from 'three/addons/tsl/display/BloomNode.js';
-import { motionBlur } from 'three/addons/tsl/display/MotionBlur.js';
+import { speedBlur } from './SpeedBlur';
 import { lensflare } from 'three/addons/tsl/display/LensflareNode.js';
 import { ao } from 'three/addons/tsl/display/GTAONode.js';
 import { traa } from 'three/addons/tsl/display/TRAANode.js';
 import { smaa } from 'three/addons/tsl/display/SMAANode.js';
 import { chromaticAberration } from 'three/addons/tsl/display/ChromaticAberrationNode.js';
-import { radialBlur } from 'three/addons/tsl/display/radialBlur.js';
 import { clamp01 } from './math';
 
 /** Linear luminance above which a pixel is treated as a light source. */
@@ -54,11 +54,25 @@ export interface PostFXQuality {
   antialias: AntialiasMode;
   /** Velocity-buffer motion blur. */
   motionBlur: boolean;
-  /** Samples the motion blur takes along the velocity vector. */
+  /**
+   * Taps the blur takes along the combined velocity and streak direction.
+   *
+   * Lower than they were, because there is now one loop where there were two:
+   * ten taps here do the work sixteen plus twelve did across two passes. A tap
+   * measured at about 1.5 ms at native resolution, and sixteen of them under a
+   * blur already smearing the same pixels is not sixteen taps' worth of image.
+   */
   motionBlurSamples: number;
   /** Ghosts and streaks pivoted around the centre from every bright spot. */
   lensflare: boolean;
-  /** Ground-truth ambient occlusion: contact darkening where surfaces meet. */
+  /**
+   * Ground-truth ambient occlusion: contact darkening where surfaces meet.
+   *
+   * Ultra only. Measured at ~35 ms of a 115 ms frame — thirty per cent of the
+   * budget — for an effect that is genuinely subtle in a scene this white and
+   * this convex. Worth having where somebody has asked for everything; not
+   * worth a third of the frame anywhere else.
+   */
   gtao: boolean;
   /** Speed-driven radial streaks and chromatic fringing. */
   speedEffects: boolean;
@@ -67,9 +81,9 @@ export interface PostFXQuality {
 
 export const QUALITY_PRESETS: Record<QualityLevel, PostFXQuality> = {
   low: { antialias: 'none', motionBlur: false, motionBlurSamples: 8, speedEffects: false, bloomStrength: 0.2, lensflare: false, gtao: false },
-  medium: { antialias: 'smaa', motionBlur: true, motionBlurSamples: 10, speedEffects: true, bloomStrength: 0.26, lensflare: true, gtao: false },
-  high: { antialias: 'smaa', motionBlur: true, motionBlurSamples: 16, speedEffects: true, bloomStrength: 0.32, lensflare: true, gtao: true },
-  ultra: { antialias: 'smaa', motionBlur: true, motionBlurSamples: 24, speedEffects: true, bloomStrength: 0.36, lensflare: true, gtao: true },
+  medium: { antialias: 'smaa', motionBlur: true, motionBlurSamples: 8, speedEffects: true, bloomStrength: 0.26, lensflare: true, gtao: false },
+  high: { antialias: 'smaa', motionBlur: true, motionBlurSamples: 10, speedEffects: true, bloomStrength: 0.32, lensflare: true, gtao: false },
+  ultra: { antialias: 'smaa', motionBlur: true, motionBlurSamples: 12, speedEffects: true, bloomStrength: 0.36, lensflare: true, gtao: true },
 };
 
 /**
@@ -131,6 +145,15 @@ const GTAO_SAMPLES = 32;
  * background behind it, and matching it to the radius brings the halos back.
  */
 const GTAO_THICKNESS = 6;
+
+/**
+ * How far the streaks reach at full deflection, in screen widths.
+ *
+ * The radial term is added to the velocity vector, so it is measured in the
+ * same units: a fraction of the screen crossed between the first tap and the
+ * last, at the edge of the frame.
+ */
+const STREAK_REACH = 0.09;
 
 const BLUR_SCALE_MAX = 1.6;
 
@@ -263,31 +286,31 @@ export class PostFX {
     // and blows out.
     node = asColour(node.mul(this.exposure));
 
-    // Motion blur runs before bloom, and on a resolved texture. Several of the
-    // addon nodes sample their input directly, so anything handed to them has to
-    // be a texture rather than an arbitrary expression — `convertToTexture`
-    // resolves the chain so far into one.
+    // The blur, before bloom, and on a resolved texture: the loop samples its
+    // input directly, so it has to be a texture rather than an expression.
+    //
+    // One pass, not two. Motion blur and the speed streaks were separate
+    // functions with a `convertToTexture` between them, walking the same
+    // texture in two directions for twenty-eight taps across two full-screen
+    // passes. They are one walk along the sum of the two directions now, and
+    // the streaks ride taps the motion blur was already paying for.
     if (quality.motionBlur) {
       // `.xy` explicitly: the velocity target is a vec4 and the blur adds the
       // offset to a vec2 UV.
       const motion = velocityTexture.xy.mul(this.blurScale);
-      node = asColour(motionBlur(convertToTexture(node), motion, float(quality.motionBlurSamples)));
+      const streak = quality.speedEffects ? this.radialAmount.mul(STREAK_REACH) : float(0);
+      node = asColour(
+        speedBlur(convertToTexture(node), motion, streak, int(quality.motionBlurSamples)),
+      );
     }
 
-    if (quality.speedEffects) {
-      // Streaks pull outward from the centre of the screen, so they read as
-      // forward motion rather than as a camera shake.
-      const streaks = asColour(
-        radialBlur(convertToTexture(node), {
-          center: vec2(0.5, 0.5),
-          weight: float(0.55),
-          decay: float(0.94),
-          count: float(12),
-          exposure: float(1),
-        }),
-      );
-      node = asColour(mix(node, streaks, this.radialAmount));
-    }
+    // Resolved once, here, and this matters more than it looks.
+    //
+    // `bloom()` does not resolve its input, and `node` is used twice below —
+    // once as bloom's input and once in the add. Left as an expression, the
+    // whole blur loop would be compiled into bloom's luminosity pass *and* into
+    // the final composite, and run twice per pixel for one image.
+    node = asColour(convertToTexture(node));
 
     // Bloom is added rather than mixed: the emissive trim, the pad chevrons and
     // the thruster glow are already over 1.0, and adding keeps them reading as

@@ -207,6 +207,12 @@ export class MenuStage {
   private readonly panels = new Map<MenuScreen, Group>();
   private readonly lists = new Map<MenuScreen, ListMenu>();
   private settingsList: OptionList | null = null;
+
+  /** Re-reads the settings rows, for any whose choices are not fixed. */
+  refreshSettings(): void {
+    this.settingsList?.refreshValues();
+  }
+
   private readonly statBars: StatBar[] = [];
   private readonly craftBlurb: TextMesh;
   private readonly craftName: TextMesh;

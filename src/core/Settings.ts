@@ -7,6 +7,15 @@ export interface GameSettings {
   /** Overrides the quality preset's antialiasing. */
   antialias: AntialiasMode;
   /** Drop resolution under load to hold the frame budget. */
+  /**
+   * The resolution ceiling, as a multiplier on the display's pixel density.
+   *
+   * Stored as the multiplier rather than as a rung index, because a rung index
+   * means nothing on a different display: moving the window to a monitor with
+   * another pixel ratio would silently change what was chosen. The ladder finds
+   * the nearest rung to this on whatever display it is asked about.
+   */
+  resolutionScale: number;
   adaptiveResolution: boolean;
   /** Frame rate the adaptive scaler aims for. */
   targetFps: 60 | 120;
@@ -16,6 +25,9 @@ export interface GameSettings {
 export const DEFAULT_SETTINGS: GameSettings = {
   quality: 'high',
   antialias: 'smaa',
+  // Native. The game renders at the display's real pixels until told
+  // otherwise; dropping below that is the player's call to make.
+  resolutionScale: 1,
   // Off by default. Dropping below the display's real pixel density is a
   // visible cost, and it should be a choice rather than something that quietly
   // happens the first time a frame runs long.
@@ -41,6 +53,10 @@ export function loadSettings(): GameSettings {
     const parsed = JSON.parse(raw) as Partial<GameSettings>;
     return {
       quality: isQuality(parsed.quality) ? parsed.quality : DEFAULT_SETTINGS.quality,
+      resolutionScale:
+        typeof parsed.resolutionScale === 'number' && parsed.resolutionScale > 0 && parsed.resolutionScale <= 1
+          ? parsed.resolutionScale
+          : DEFAULT_SETTINGS.resolutionScale,
       antialias: isAntialias(parsed.antialias) ? parsed.antialias : DEFAULT_SETTINGS.antialias,
       adaptiveResolution:
         typeof parsed.adaptiveResolution === 'boolean'

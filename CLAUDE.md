@@ -115,6 +115,13 @@ Both were found by measurement, and both would be easy to reintroduce:
 - **The collision query's search window** was sized for sixty metres of travel per tick. A
   craft covers under two at RAPIER speed. Narrowing it to fifteen made the headless test suite
   three times faster and changed no lap time by a millisecond.
+- **Two thirds of the frame was post-processing.** GPU timestamps on the F3 overlay put High at
+  115 ms on an Intel Gen9: 35 for the scene and 77 for the passes over it. Motion blur and the
+  speed streaks were two full-screen passes walking the same texture in two directions, and the
+  result was left as an expression that bloom then compiled a second time. They are one loop now
+  (`core/SpeedBlur.ts`), resolved once. GTAO went to Ultra alone — 35 ms for an effect that is
+  genuinely subtle on a white, convex, sunlit circuit. The player also gets a resolution ladder,
+  because at 1.7 million pixels every one of those passes pays for all of them.
 
 ## Two things that are easy to get wrong twice
 
