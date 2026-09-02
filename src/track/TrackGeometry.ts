@@ -19,6 +19,15 @@ export const TUNNEL_RADIUS = 19;
 const TUNNEL_SEGMENTS = 14;
 /** How thick the tunnel's walls are, in metres. */
 export const TUNNEL_THICKNESS = 2.4;
+/**
+ * How far the shell continues below the road, in metres.
+ *
+ * The arch used to spring from the road plane and the glass floor hangs a metre
+ * under it, which left the tube open along both sides: two walls and a pane
+ * with daylight between them. This carries the walls down past the top of the
+ * glass so the section closes.
+ */
+export const TUNNEL_SKIRT = 1.45;
 
 const _portal = new Vector3();
 
@@ -167,6 +176,17 @@ function buildTunnels(track: Track): BufferGeometry | null {
         accent: 1,
       });
     }
+    // Down the inside of the right wall, across its foot, and back up the
+    // outside — the skirt that meets the glass. `u` stays at the springing's
+    // value so the light runs do not restart down the wall.
+    profile.push({ anchor: 'centre', offset: TUNNEL_RADIUS, up: -TUNNEL_SKIRT, u: 1, accent: 1 });
+    profile.push({
+      anchor: 'centre',
+      offset: TUNNEL_RADIUS + TUNNEL_THICKNESS,
+      up: -TUNNEL_SKIRT,
+      u: 1,
+      accent: 1,
+    });
     // Outside, back the other way. `u` runs past 1 so the shading knows it is
     // looking at the outside of the arch and not at the light runs.
     for (let i = TUNNEL_SEGMENTS; i >= 0; i--) {
@@ -179,6 +199,15 @@ function buildTunnels(track: Track): BufferGeometry | null {
         accent: 1,
       });
     }
+    // And the left wall's skirt, the mirror of the right one.
+    profile.push({
+      anchor: 'centre',
+      offset: -(TUNNEL_RADIUS + TUNNEL_THICKNESS),
+      up: -TUNNEL_SKIRT,
+      u: 2,
+      accent: 1,
+    });
+    profile.push({ anchor: 'centre', offset: -TUNNEL_RADIUS, up: -TUNNEL_SKIRT, u: 2, accent: 1 });
     // And back to the first point, closing the ring at the left springing.
     profile.push({ ...profile[0]!, u: 2 });
 
@@ -213,23 +242,42 @@ function buildTunnelPortal(track: Track, s: number, height: number): BufferGeome
   const colours: number[] = [];
   const indices: number[] = [];
 
+  // The arch, plus one ring at each springing dropped to the foot of the skirt,
+  // so the face of the ring reaches as far down as the shell behind it does.
+  const rings: { across: number; up: number }[][] = [];
+  rings.push([
+    { across: -TUNNEL_RADIUS, up: -TUNNEL_SKIRT },
+    { across: -(TUNNEL_RADIUS + TUNNEL_THICKNESS), up: -TUNNEL_SKIRT },
+  ]);
   for (let i = 0; i <= TUNNEL_SEGMENTS; i++) {
     const angle = Math.PI - (i / TUNNEL_SEGMENTS) * Math.PI;
-    for (const outer of [false, true]) {
-      const across = Math.cos(angle) * (outer ? TUNNEL_RADIUS + TUNNEL_THICKNESS : TUNNEL_RADIUS);
-      const up = Math.sin(angle) * (outer ? height + TUNNEL_THICKNESS : height);
+    rings.push([
+      { across: Math.cos(angle) * TUNNEL_RADIUS, up: Math.sin(angle) * height },
+      {
+        across: Math.cos(angle) * (TUNNEL_RADIUS + TUNNEL_THICKNESS),
+        up: Math.sin(angle) * (height + TUNNEL_THICKNESS),
+      },
+    ]);
+  }
+  rings.push([
+    { across: TUNNEL_RADIUS, up: -TUNNEL_SKIRT },
+    { across: TUNNEL_RADIUS + TUNNEL_THICKNESS, up: -TUNNEL_SKIRT },
+  ]);
+
+  rings.forEach((ring, i) => {
+    ring.forEach((point, side) => {
       _portal
         .copy(frame.position)
-        .addScaledVector(frame.right, across)
-        .addScaledVector(frame.up, up);
+        .addScaledVector(frame.right, point.across)
+        .addScaledVector(frame.up, point.up);
       positions.push(_portal.x, _portal.y, _portal.z);
       normals.push(frame.tangent.x, frame.tangent.y, frame.tangent.z);
-      uvs.push(outer ? 1.6 : 1.4, i / TUNNEL_SEGMENTS);
+      uvs.push(side === 1 ? 1.6 : 1.4, i / rings.length);
       colours.push(1, 1, 1, 1);
-    }
-  }
+    });
+  });
 
-  for (let i = 0; i < TUNNEL_SEGMENTS; i++) {
+  for (let i = 0; i < rings.length - 1; i++) {
     const a = i * 2;
     indices.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
   }

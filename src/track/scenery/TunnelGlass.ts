@@ -3,16 +3,19 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { MeshStandardNodeMaterial } from 'three/webgpu';
 import { attribute, float, fract, max, min, mix, normalView, positionViewDirection, smoothstep, uv, vec3 } from 'three/tsl';
 import { buildRibbon, type ProfilePoint } from '../TrackRibbon';
-import { TUNNEL_RADIUS, TUNNEL_THICKNESS } from '../TrackGeometry';
+import { TUNNEL_RADIUS, TUNNEL_SKIRT, TUNNEL_THICKNESS } from '../TrackGeometry';
 import type { Track } from '../Track';
 
 /**
  * Metres the pane hangs below the road.
  *
- * Far enough that the road's own sheet never fights it in the depth buffer,
- * close enough that the tube still reads as one object from outside.
+ * Derived from the shell's skirt rather than chosen, so the two cannot drift
+ * apart: the pane's top sits this far above the foot of the walls, which is
+ * what closes the section. Far enough below the road that its sheet never
+ * fights the pane in the depth buffer.
  */
-const DROP = 1.1;
+const OVERLAP = 0.35;
+const DROP = TUNNEL_SKIRT - OVERLAP;
 /**
  * How thick the pane is, in metres.
  *

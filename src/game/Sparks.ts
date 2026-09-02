@@ -5,11 +5,17 @@ import type { Craft } from './Craft';
 import { Rng } from '@/core/Rng';
 import { clamp01 } from '@/core/math';
 
-/** Sparks alive at once. Beyond this the oldest are recycled. */
-const CAPACITY = 220;
+/**
+ * Sparks alive at once. Beyond this the oldest are recycled.
+ *
+ * Twice the count for twice as long is four times the pool, and each one is a
+ * matrix write on a frame it is visible — still nothing next to a scene pass,
+ * and the mesh only draws the live ones.
+ */
+const CAPACITY = 540;
 
 /** Seconds a spark lives, before the per-spark spread. */
-const LIFE = 0.42;
+const LIFE = 0.84;
 /** Metres per second downward. Well over gravity: sparks should fall, visibly. */
 const FALL = 26;
 /** How fast a spark bleeds speed, per second. */
@@ -20,10 +26,10 @@ const THICKNESS = 0.07;
 const STREAK = 0.055;
 
 /** Sparks thrown by a clean hit, at the lightest and heaviest contact. */
-const BURST_MIN = 5;
-const BURST_MAX = 34;
+const BURST_MIN = 10;
+const BURST_MAX = 68;
 /** And per second while a hull is grinding along something. */
-const SCRAPE_RATE = 55;
+const SCRAPE_RATE = 110;
 
 /** Below this, an impact is not worth a spark. */
 const IMPACT_FLOOR = 0.04;

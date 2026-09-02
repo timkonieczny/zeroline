@@ -17,6 +17,23 @@ const FOV_FLAT_OUT = 86;
 const FOLLOW_HALF_LIFE = 0.055;
 /** Half-life of the roll follow. Slower than position, so banking reads. */
 const ROLL_HALF_LIFE = 0.13;
+/**
+ * Half-life of the boom's own heading, in seconds.
+ *
+ * Much slower than the position it drives. The camera hangs behind where the
+ * craft *was* pointed while the craft has already turned, so a corner shows its
+ * flank before the camera comes round — which is the whole difference between a
+ * camera bolted to the tail and one on a boom.
+ */
+const HEADING_HALF_LIFE = 0.2;
+/**
+ * The furthest the boom may trail the craft's heading, in radians.
+ *
+ * Without a limit a long corner winds the lag up until the camera is looking at
+ * the side of the craft and the road has left the frame. Twenty degrees is
+ * enough to see down the flank and not enough to lose the corner.
+ */
+const HEADING_LAG_LIMIT = 0.35;
 /** Peak camera displacement from a full-severity impact, in metres. */
 const SHAKE_AMPLITUDE = 0.85;
 /** How quickly impact shake decays, per second. */
@@ -30,6 +47,7 @@ const _right = new Vector3();
 const _desired = new Vector3();
 const _look = new Vector3();
 const _shake = new Vector3();
+const _axis = new Vector3();
 
 /**
  * The chase camera.
@@ -38,6 +56,13 @@ const _shake = new Vector3();
  * trick: a camera rigidly bolted to the craft makes the world rotate around a
  * static ship and reads as nothing happening, while a camera that lags in
  * rotation lets the ship visibly yaw and bank inside the frame.
+ *
+ * The lag is in the boom, not in the aim. Where the camera *sits* is behind a
+ * heading that eases toward the craft's own and is capped at twenty degrees
+ * behind it; where it *looks* is straight down the craft's real nose. Turn in,
+ * and for as long as the craft is rotating the camera is off to the outside of
+ * it and you are looking down the flank; hold a steady line and the two come
+ * back together.
  *
  * Field of view opens with speed and snaps wider under boost, which does more
  * for the sense of velocity than any post effect.
@@ -53,6 +78,8 @@ export class ChaseCamera {
 
   private readonly position = new Vector3();
   private readonly up = new Vector3(0, 1, 0);
+  /** Where the boom is pointed, which trails where the craft is pointed. */
+  private readonly heading = new Vector3(0, 0, -1);
 
   /** Places the camera behind the craft with no easing, for a race start or a cut. */
   reset(): void {
@@ -82,9 +109,25 @@ export class ChaseCamera {
     const distance = BASE_DISTANCE + SPEED_DISTANCE * speedFraction;
     const height = BASE_HEIGHT + SPEED_HEIGHT * speedFraction;
 
+    if (this.initialised) {
+      this.heading.lerp(_forward, 1 - Math.pow(2, -dt / HEADING_HALF_LIFE)).normalize();
+
+      // Cap the trail. `angleTo` is the whole answer; the axis to swing back
+      // about is the one the two headings already define.
+      const trailing = this.heading.angleTo(_forward);
+      if (trailing > HEADING_LAG_LIMIT) {
+        _axis.crossVectors(this.heading, _forward);
+        if (_axis.lengthSq() > 1e-8) {
+          this.heading.applyAxisAngle(_axis.normalize(), trailing - HEADING_LAG_LIMIT).normalize();
+        }
+      }
+    } else {
+      this.heading.copy(_forward);
+    }
+
     _desired
       .copy(_craftPosition)
-      .addScaledVector(_forward, -distance * behind)
+      .addScaledVector(this.heading, -distance * behind)
       .addScaledVector(_up, height);
 
     if (!this.initialised) {
