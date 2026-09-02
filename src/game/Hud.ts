@@ -7,7 +7,7 @@ import { WEAPONS } from './weapons/Weapons';
 import { ResultsTable, formatTime } from './Results';
 import { Minimap } from './Minimap';
 import { EffectBars } from './EffectBars';
-import { TouchPads } from './TouchPads';
+import { BUTTON_REACH, PAD_REACH, TouchPads } from './TouchPads';
 import { IS_TOUCH_DEVICE, safeAreaInsets } from '@/core/Platform';
 import type { TouchControlId, TouchRegion } from '@/core/Touch';
 import { PauseMenu, type PauseChoice } from './PauseMenu';
@@ -377,25 +377,34 @@ export class Hud {
     /** Screen coordinates to plane-local ones. */
     const at = (x: number, y: number): [number, number, number] => [x - width / 2, y - height / 2, 0];
 
+    // On a phone the four corners belong to the thumbs, so every cluster steps
+    // inward far enough to clear the control that has taken its corner.
+    const pads = this.touchPads ? PAD_REACH : 0;
+    const buttons = this.touchPads ? BUTTON_REACH : 0;
+    const near = MARGIN;
+
     // Bottom right: the speed readout, the single most-watched number.
-    this.speedValue.position.set(...at(width - MARGIN, MARGIN + 62));
-    this.speedUnit.position.set(...at(width - MARGIN, MARGIN + 18));
+    this.speedValue.position.set(...at(width - near - pads, MARGIN + 62));
+    this.speedUnit.position.set(...at(width - near - pads, MARGIN + 18));
 
     // Bottom left: position, then the shield bar under it.
-    this.positionValue.position.set(...at(MARGIN, MARGIN + 74));
-    this.positionOf.position.set(...at(MARGIN + this.positionValue.size.x - 8, MARGIN + 52));
-    this.shieldTrack.position.set(...at(MARGIN + BAR_WIDTH / 2, MARGIN + 18));
-    this.shieldFill.position.set(...at(MARGIN, MARGIN + 18));
+    this.positionValue.position.set(...at(near + pads, MARGIN + 74));
+    this.positionOf.position.set(...at(near + pads + this.positionValue.size.x - 8, MARGIN + 52));
+    this.shieldTrack.position.set(...at(near + pads + BAR_WIDTH / 2, MARGIN + 18));
+    this.shieldFill.position.set(...at(near + pads, MARGIN + 18));
 
     // Top left: lap counter.
-    this.lapLabel.position.set(...at(MARGIN, height - MARGIN - 6));
-    this.lapValue.position.set(...at(MARGIN, height - MARGIN - 34));
+    this.lapLabel.position.set(...at(near + buttons, height - MARGIN - 6));
+    this.lapValue.position.set(...at(near + buttons, height - MARGIN - 34));
 
     // Top right: race clock, best lap, and the minimap under both.
-    this.timeValue.position.set(...at(width - MARGIN, height - MARGIN - 12));
-    this.bestLabel.position.set(...at(width - MARGIN, height - MARGIN - 42));
+    this.timeValue.position.set(...at(width - near - buttons, height - MARGIN - 12));
+    this.bestLabel.position.set(...at(width - near - buttons, height - MARGIN - 42));
     this.minimap.group.position.set(
-      ...at(width - MARGIN - this.minimap.extent.x / 2, height - MARGIN - 74 - this.minimap.extent.y / 2),
+      ...at(
+        width - MARGIN - this.minimap.extent.x / 2,
+        height - MARGIN - 74 - buttons - this.minimap.extent.y / 2,
+      ),
     );
 
     this.weaponPanel.position.set(...at(width / 2, MARGIN + 34));

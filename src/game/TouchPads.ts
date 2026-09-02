@@ -29,6 +29,16 @@ const CONTROL_GAP = 16;
  */
 const EDGE_GUARD = 20;
 
+/**
+ * How far into the frame each corner's controls reach, in pixels.
+ *
+ * Exported so the HUD can lay its readouts out clear of them from the same
+ * numbers. A speed readout under the airbrake is a readout you cannot see and a
+ * pad you press by accident.
+ */
+export const PAD_REACH = PAD_RADIUS * 2 + CONTROL_GAP;
+export const BUTTON_REACH = BUTTON_RADIUS * 2 + CONTROL_GAP;
+
 /** How much of the frame a held control brightens by. */
 const REST_ALPHA = 0.22;
 const HELD_ALPHA = 0.5;
