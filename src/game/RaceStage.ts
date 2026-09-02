@@ -5,8 +5,9 @@ import { TrackMesh } from '@/track/TrackMesh';
 import { Environment } from '@/track/scenery/Environment';
 import { Skyline } from '@/track/scenery/Skyline';
 import { SkyHighway } from '@/track/scenery/SkyHighway';
+import { StartLine } from '@/track/scenery/StartLine';
 import type { TrackDefinition } from '@/track/TrackTypes';
-import { Race, type RaceSetup } from './Race';
+import { COUNTDOWN, Race, type RaceSetup } from './Race';
 import { GliderModel } from './GliderModel';
 import { WeaponVisuals } from './weapons/WeaponVisuals';
 import { ChaseCamera } from './ChaseCamera';
@@ -52,6 +53,7 @@ export class RaceStage {
   private readonly environment: Environment;
   private readonly skyline: Skyline;
   private readonly highway: SkyHighway;
+  private readonly startLine: StartLine;
   private readonly ordnance = new WeaponVisuals();
   /** The shots before the lights, or null once they are done. */
   private intro: RaceIntro | null = null;
@@ -82,6 +84,9 @@ export class RaceStage {
 
     this.highway = new SkyHighway(this.track);
     this.scene.add(this.highway.group);
+
+    this.startLine = new StartLine(this.track);
+    this.scene.add(this.startLine.group);
 
     this.scene.add(this.ordnance.group);
 
@@ -226,6 +231,7 @@ export class RaceStage {
     }
     this.environment.update(camera.position);
     this.highway.update(dt);
+    this.startLine.update(1 - this.race.countdown / COUNTDOWN, this.race.time >= 0 ? this.race.time : -1);
     this.ordnance.update(this.race.projectiles);
     this.hud.update(this.race, uiDt);
   }
@@ -241,6 +247,7 @@ export class RaceStage {
     this.environment.dispose();
     this.skyline.dispose();
     this.highway.dispose();
+    this.startLine.dispose();
     this.ordnance.dispose();
     this.hud.dispose();
   }

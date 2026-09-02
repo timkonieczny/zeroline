@@ -493,10 +493,10 @@ export class Skyline {
     const hash = fract(sin(cell.x.mul(12.9898).add(cell.y.mul(78.233)).add(seed.mul(37.719))).mul(43758.5453));
     const lit = step(float(LIT_FRACTION), hash).mul(pane);
 
-    // Gentle: glass is a little darker than the concrete around it, not a hole.
-    // A hard pane-to-wall contrast turns a facade into a checkerboard, which is
-    // as wrong as the noise it replaced.
-    const concrete = mix(vec3(0.9, 0.91, 0.93), vec3(0.62, 0.67, 0.72), pane.mul(0.8));
+    // A pane on a concrete building is glazing too, so it is tinted for what it
+    // returns from the sky probe rather than painted a darker grey. The old
+    // flat darkening was a hole in a wall; this one catches the clouds.
+    const concrete = mix(vec3(0.9, 0.91, 0.93), vec3(0.72, 0.81, 0.88), pane);
 
     // Half the skyline is curtain glass. It reflects the sky rather than the
     // circuit: a real probe per building is out of the question, and at these
@@ -531,12 +531,15 @@ export class Skyline {
     // make a shadowed street read as night, which the canyon district does more
     // than enough of on its own.
     material.emissiveNode = color(0xfff2dc).mul(lit).mul(mix(float(0.13), float(0.07), glass));
-    // Near-mirror on the glass, with the mullions a shade rougher so the grid
-    // survives in the reflection instead of being polished away.
-    material.roughnessNode = mix(mix(float(0.74), float(0.2), pane), mix(float(0.16), float(0.04), pane), glass);
-    // Full metal on the glass towers: that is the whole reflection, and it is
-    // the sky probe that supplies it.
-    material.metalnessNode = mix(float(0.05), float(1), glass);
+    // Near-mirror on every pane, with the mullions and the concrete around them
+    // rough, so the grid survives in the reflection instead of being polished
+    // away and a plain block still reads as a plain block.
+    material.roughnessNode = mix(mix(float(0.74), float(0.07), pane), mix(float(0.16), float(0.04), pane), glass);
+    // Metal is what makes a pane a mirror: a dielectric at this roughness gets a
+    // faint sheen and nothing else, which is why the windows on the concrete
+    // half of the skyline used to look painted on. The wall between them stays
+    // dielectric, so only the glazing reflects.
+    material.metalnessNode = mix(pane.mul(0.92), float(1), glass);
     material.vertexColors = true;
     return material;
   }

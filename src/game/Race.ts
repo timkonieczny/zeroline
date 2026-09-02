@@ -28,7 +28,7 @@ export interface RaceSetup {
 }
 
 /** Seconds of countdown before the lights go out. */
-const COUNTDOWN = 4;
+export const COUNTDOWN = 4;
 /** Seconds of boost a speed pad grants. */
 const PAD_BOOST = 1.35;
 /** Seconds before the same craft can trigger the same pad again. */

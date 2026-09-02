@@ -104,10 +104,29 @@ const BLUR_REFERENCE_FRAME = 1 / 60;
  * enough that daylight on the way out is well past the bloom threshold. Higher
  * and the tunnel stops being dark at all, which costs the exit its contrast.
  */
-const TUNNEL_EXPOSURE = 2.15;
+const TUNNEL_EXPOSURE = 2.7;
 /** How fast the eye opens up in the dark, and closes again in the light. */
-const ADAPT_TO_DARK = 1.1;
-const ADAPT_TO_LIGHT = 2.4;
+const ADAPT_TO_DARK = 1.7;
+/**
+ * And how fast it closes again on the way out.
+ *
+ * Slower than the eye really is. A physical stop-down would be over before the
+ * craft cleared the portal, and the exit is the one moment in a lap the effect
+ * exists for — held here to about two seconds, which is roughly the length of
+ * the straight that follows a tunnel on this circuit.
+ */
+const ADAPT_TO_LIGHT = 1.05;
+/**
+ * How much the glare lifts the bloom on top of the exposure.
+ *
+ * The exposure alone already pushes daylight over the threshold; this widens
+ * what the bloom does with it, so the exit blooms rather than merely being
+ * bright. At the full 1 the sky bleeds into the barriers and the trim streaks,
+ * then it tightens back to the preset as the eye recovers. Tried at 1.9, which
+ * blew the road out along with the sky: a corner taken blind is a worse effect
+ * than no effect, and the exposure alone carries the brightness anyway.
+ */
+const GLARE_BLOOM_GAIN = 1;
 
 /**
  * Radius the occlusion is gathered over, in metres.
@@ -183,6 +202,8 @@ export class PostFX {
   private readonly aberrationStrength = uniform(0);
   private readonly radialAmount = uniform(0);
   private readonly bloomStrength = uniform(0.65);
+  /** The preset's bloom, before the tunnel glare is added on top of it. */
+  private baseBloom = 0.65;
   /**
    * How much of the lens flare is mixed in.
    *
@@ -214,6 +235,7 @@ export class PostFX {
     overlay?: { scene: Scene; camera: Camera },
   ) {
     this.post = new PostProcessing(renderer);
+    this.baseBloom = quality.bloomStrength;
     this.bloomStrength.value = quality.bloomStrength;
 
     const scenePass = pass(scene, camera);
@@ -417,6 +439,12 @@ export class PostFX {
     const adaptRate = enclosed ? ADAPT_TO_DARK : ADAPT_TO_LIGHT;
     this.smoothedExposure += (targetExposure - this.smoothedExposure) * (1 - Math.exp(-dt * adaptRate));
     this.exposure.value = this.smoothedExposure;
+
+    // How far the eye is still open, 0..1. Inside the tunnel there is almost
+    // nothing over the threshold for the extra bloom to find, so this reads as
+    // an exit effect even though it is driven by the same number going in.
+    const glare = clamp01((this.smoothedExposure - 1) / (TUNNEL_EXPOSURE - 1));
+    this.bloomStrength.value = this.baseBloom * (1 + GLARE_BLOOM_GAIN * glare);
 
     // Both effects stay at zero until well past half speed, so normal driving
     // is clean and only the top of the range feels dangerous.
