@@ -1,4 +1,4 @@
-import { Quaternion, Scene, Vector3 } from 'three';
+import { Quaternion, Scene, Vector3, type PerspectiveCamera } from 'three';
 import { Track } from '@/track/Track';
 import type { LoadedTrack } from '@/track/TrackLoader';
 import { TrackMesh } from '@/track/TrackMesh';
@@ -188,6 +188,16 @@ export class RaceStage {
   /** True while the intro owns the camera and the race is held. */
   get introducing(): boolean {
     return this.intro !== null;
+  }
+
+  /** Establishing shots the intro will cut to, or zero once it is done. */
+  get introShots(): number {
+    return this.intro?.shotCount ?? 0;
+  }
+
+  /** Places the camera where shot `index` will put it, for warming pipelines. */
+  previewIntroShot(index: number, camera: PerspectiveCamera): void {
+    this.intro?.preview(index, camera, this.track);
   }
 
   /** Cuts the intro short, leaving it just enough to settle. */

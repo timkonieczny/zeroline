@@ -86,6 +86,28 @@ export class RaceIntro {
     return this.elapsed < SHOT_TIME * this.shots.length;
   }
 
+  /** How many establishing shots this circuit's intro is made of. */
+  get shotCount(): number {
+    return this.shots.length;
+  }
+
+  /**
+   * Places the camera as shot `index` will, without advancing anything.
+   *
+   * For rendering each viewpoint once behind the loading screen. A cut used to
+   * stall for a second on arrival: everything the shot could see was in memory,
+   * but nothing had been *drawn* from there, so the first frame paid for every
+   * pipeline the new view needed — the shadow pass picking up buildings that
+   * had never cast into it, the water reflecting a stretch it had never
+   * reflected. Drawing each shot once while the curtain is down pays all of
+   * that where a pause is expected.
+   */
+  preview(index: number, camera: PerspectiveCamera, track: Track): void {
+    const shot = this.shots[Math.min(index, this.shots.length - 1)]!;
+    // Halfway through the move, which is the middle of what it will ever see.
+    RaceIntro.placeShot(camera, track, shot, 0.5);
+  }
+
   /** Cuts to the end of the orbit, leaving just enough to settle. */
   skip(): void {
     this.elapsed = Math.max(this.elapsed, SHOT_TIME * this.shots.length + ORBIT_TIME - SKIP_TAIL);

@@ -527,7 +527,7 @@ export class Hud {
     this.skipHint.setOpacity(this.introHint);
 
     // Above the weapon panel, clear of it whether it is out or tucked away.
-    this.effects.update(player, dt, MARGIN + EFFECTS_ABOVE);
+    this.effects.update(player, MARGIN + EFFECTS_ABOVE);
     this.effects.setOpacity(this.raceChrome);
 
     this.weaponName.setOpacity(this.weaponSlide * this.raceChrome);

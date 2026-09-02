@@ -141,6 +141,7 @@ export class Projectiles {
     switch (weapon) {
       case 'turbo':
         st.boost = Math.max(st.boost, TURBO_SECONDS);
+        st.boostFromTurbo = true;
         return true;
 
       case 'shield':

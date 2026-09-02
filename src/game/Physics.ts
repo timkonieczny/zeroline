@@ -46,6 +46,7 @@ export function stepCraft(craft: Craft, input: InputSnapshot, track: Track, dt: 
   const tele = craft.telemetry;
 
   st.boost = Math.max(0, st.boost - dt);
+  if (st.boost <= 0) st.boostFromTurbo = false;
   st.invulnerable = Math.max(0, st.invulnerable - dt);
   st.autopilot = Math.max(0, st.autopilot - dt);
   st.respawnGrace = Math.max(0, st.respawnGrace - dt);
@@ -270,6 +271,7 @@ export function placeOnGrid(craft: Craft, track: Track, slot: number): void {
   st.grounded = true;
   st.shield = craft.handling.shieldMax;
   st.boost = 0;
+  st.boostFromTurbo = false;
   st.eliminated = false;
   craft.lap = 0;
   craft.distance = 0;

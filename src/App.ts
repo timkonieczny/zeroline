@@ -1,3 +1,4 @@
+import { Quaternion, Vector3 } from 'three';
 import { Renderer } from '@/core/Renderer';
 import { Loop } from '@/core/Loop';
 import { Input } from '@/core/Input';
@@ -14,6 +15,10 @@ import { loadUiFont } from '@/ui/Fonts';
 import { loadSkyTexture } from '@/track/scenery/SkyTexture';
 
 type Mode = 'menu' | 'race';
+
+/** Where the camera was before the pipeline warm-up borrowed it. */
+const _warmPosition = new Vector3();
+const _warmRotation = new Quaternion();
 
 /** Seconds the classification stays up before it dismisses itself. */
 const RESULTS_HOLD = 20;
@@ -33,7 +38,7 @@ const RESULTS_GRACE = 0.8;
  */
 const QUALITY_ORDER: readonly GameSettings['quality'][] = ['low', 'medium', 'high', 'ultra'];
 
-/** How long the loading screen holds while shaders compile, in ms. */
+/** Longest the loading screen waits on the driver's compile, in ms. */
 const PRECOMPILE_HOLD = 900;
 
 /**
@@ -287,20 +292,46 @@ export class App {
    * which `compileAsync` on the scene alone does not cover.
    */
   private async warmPipelines(): Promise<void> {
-    if (!this.race) return;
+    if (!this.race || !this.racePost) return;
     if (this.curtainStatus) this.curtainStatus.textContent = 'Compiling shaders';
 
-    // Started, not waited on.
+    // Kicked off and raced against a deadline, not simply awaited.
     //
     // `compileAsync` hands off to the driver and resolves when the driver feels
-    // like it; awaiting that puts the loading screen at the mercy of something
-    // with no upper bound on how long it takes. So the compile is kicked off,
-    // the curtain holds for a fixed moment, and then it lifts whatever has
-    // happened. Anything still uncompiled compiles when it is first drawn,
-    // which is exactly the behaviour this replaces — the difference is that
-    // most of it is already done by then.
-    void this.renderer.renderer.compileAsync(this.race.scene, this.renderer.camera).catch(() => undefined);
-    await new Promise((resolve) => window.setTimeout(resolve, PRECOMPILE_HOLD));
+    // like it; waiting on that alone puts the loading screen at the mercy of
+    // something with no upper bound. So it gets the hold and no more. Anything
+    // still uncompiled compiles when it is first drawn, which is exactly the
+    // behaviour this replaces — the difference is that most of it is done.
+    const compiled = this.renderer.renderer
+      .compileAsync(this.race.scene, this.renderer.camera)
+      .catch(() => undefined);
+    await Promise.race([compiled, App.wait(PRECOMPILE_HOLD)]);
+
+    // And then draw a frame from each shot the intro will cut to.
+    //
+    // Compiling a material is not the same as having drawn with it. Every pass
+    // the frame is made of — the shadow map, the water's own reflection of the
+    // scene, the post chain reading a depth buffer it has not seen this shape
+    // of — builds its state the first time it is asked for, and a camera that
+    // teleports across the circuit asks for all of it at once. That is the
+    // second-long stall on each cut. Paying it here costs three frames behind a
+    // curtain that is already up.
+    const camera = this.renderer.camera;
+    _warmPosition.copy(camera.position);
+    _warmRotation.copy(camera.quaternion);
+
+    for (let shot = 0; shot < this.race.introShots; shot++) {
+      this.race.previewIntroShot(shot, camera);
+      this.racePost.render();
+      await App.nextFrame();
+    }
+
+    camera.position.copy(_warmPosition);
+    camera.quaternion.copy(_warmRotation);
+  }
+
+  private static wait(ms: number): Promise<void> {
+    return new Promise((resolve) => window.setTimeout(resolve, ms));
   }
 
   /** Fills the other seven seats, avoiding a grid of identical craft where possible. */
@@ -420,14 +451,17 @@ export class App {
     } else {
       const player = this.race.race.player;
       if (player.telemetry.impact > 0) this.input.rumble(player.telemetry.impact, 140);
-      // The panel still animates while the world is held, so the render step
-      // is passed through even when the simulation is not.
+      // The panel still animates while the world is held, so the render step is
+      // passed through even when the simulation is not — but not behind the
+      // curtain. That is a second of real time with nobody watching, and the
+      // intro was spending it: by the time the curtain lifted, a third of the
+      // first establishing shot had already been played to an empty room.
       this.race.render(
         alpha,
-        this.paused ? 0 : frameTime,
+        this.paused || this.transitioning ? 0 : frameTime,
         this.input.snapshot.lookBack,
         this.renderer.camera,
-        frameTime,
+        this.transitioning ? 0 : frameTime,
       );
       // The world is held but the loop is not, so the engine would otherwise
       // keep sounding whatever speed the craft stopped at.

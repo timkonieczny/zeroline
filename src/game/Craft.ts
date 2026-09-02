@@ -50,6 +50,16 @@ export interface CraftSimState {
   shield: number;
   /** Seconds of boost remaining. */
   boost: number;
+  /**
+   * Whether the boost currently running came out of a turbo.
+   *
+   * The same field carries a speed pad's boost, a clean getaway's and a turbo's,
+   * and the physics has no reason to tell them apart. The interface does: a
+   * timer bar is worth putting on screen for something the player chose to
+   * spend, and is noise for something the track hands out every few hundred
+   * metres. Cleared the moment the boost runs out.
+   */
+  boostFromTurbo: boolean;
   /** Seconds of weapon-shield remaining. */
   invulnerable: number;
   /** Seconds of autopilot remaining. */
@@ -78,6 +88,7 @@ export function createCraftSimState(): CraftSimState {
     grounded: true,
     shield: 100,
     boost: 0,
+    boostFromTurbo: false,
     invulnerable: 0,
     autopilot: 0,
     rollTimer: 0,
@@ -100,6 +111,7 @@ export function copyCraftSimState(from: CraftSimState, to: CraftSimState): void 
   to.grounded = from.grounded;
   to.shield = from.shield;
   to.boost = from.boost;
+  to.boostFromTurbo = from.boostFromTurbo;
   to.invulnerable = from.invulnerable;
   to.autopilot = from.autopilot;
   to.rollTimer = from.rollTimer;

@@ -12,11 +12,6 @@ const LABEL_GAP = 10;
 const LABEL_WIDTH = 74;
 const ROW_HEIGHT = 21;
 
-/** Below this many seconds left, the bar starts flashing. */
-const WARN_SECONDS = 1;
-/** Flashes per second while it is warning. */
-const WARN_RATE = 5;
-
 /**
  * The three things a craft can be under that run on a clock.
  *
@@ -59,8 +54,6 @@ export class EffectBars {
   private readonly opacity = uniform(1);
   private readonly trackMaterial: MeshBasicNodeMaterial;
   private height = 1;
-  /** Seconds since the stage began, for the expiry flash. */
-  private clock = 0;
 
   constructor(pixelRatio: number) {
     this.group.name = 'effect-bars';
@@ -113,16 +106,15 @@ export class EffectBars {
    * @param baseY Where the bottom row goes, in pixels from the bottom of the
    *   frame. The stack grows upward from there.
    */
-  update(craft: Craft, dt: number, baseY: number): void {
-    this.clock += dt;
-
+  update(craft: Craft, baseY: number): void {
     // Rows pack from the bottom, so a lone deflector does not sit in mid-air
     // with a gap where the boost bar would have been.
     let shown = 0;
 
     for (let i = 0; i < EFFECTS.length; i++) {
       const row = this.rows[i]!;
-      const left = craft.state[EFFECTS[i]!.key];
+      const effect = EFFECTS[i]!;
+      const left = effect.key === 'boost' && !craft.state.boostFromTurbo ? 0 : craft.state[effect.key];
 
       if (left <= 0) {
         row.peak = 0;
@@ -135,9 +127,6 @@ export class EffectBars {
       row.peak = Math.max(row.peak, left);
       const fraction = Math.min(1, left / row.peak);
 
-      // A flash over the last second, so the end of a deflector is something
-      // you feel coming rather than something you notice afterwards.
-      const flashing = left < WARN_SECONDS && Math.sin(this.clock * Math.PI * 2 * WARN_RATE) < 0;
       const y = baseY + shown * ROW_HEIGHT - this.height / 2;
       // The row is label, gap, bar, centred as a whole on the frame's middle —
       // which puts the bar itself off to the right of it by half the label.
@@ -153,7 +142,7 @@ export class EffectBars {
 
       row.label.visible = true;
       row.track.visible = true;
-      row.fill.visible = !flashing;
+      row.fill.visible = true;
       shown++;
     }
   }
