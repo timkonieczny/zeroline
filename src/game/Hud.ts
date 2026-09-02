@@ -6,6 +6,7 @@ import type { Race } from './Race';
 import { WEAPONS } from './weapons/Weapons';
 import { ResultsTable, formatTime } from './Results';
 import { Minimap } from './Minimap';
+import { EffectBars } from './EffectBars';
 import { PauseMenu, type PauseChoice } from './PauseMenu';
 
 export type { PauseChoice };
@@ -14,6 +15,8 @@ import { clamp, clamp01, lerp } from '@/core/math';
 
 /** Layout margin from the screen edge, in pixels. */
 const MARGIN = 46;
+/** Pixels above the bottom margin the timed-effect bars stack from. */
+const EFFECTS_ABOVE = 88;
 /** Width and height of the shield bar, in pixels. */
 const BAR_WIDTH = 300;
 const BAR_HEIGHT = 11;
@@ -117,6 +120,8 @@ export class Hud {
   private readonly results: ResultsTable;
   readonly pause: PauseMenu;
   private readonly minimap: Minimap;
+  /** Draining bars for whatever the player is currently under. */
+  private readonly effects: EffectBars;
   /** Fades the racing readouts down while the classification is up. */
   private raceChrome = 1;
   /** Fades the skip hint with the shots it belongs to. */
@@ -187,6 +192,11 @@ export class Hud {
 
     this.minimap = new Minimap(track, fieldSize);
     this.plane.add(this.minimap.group);
+
+    // On the plane with everything else, so it grows and sways with the rest of
+    // the interface rather than sitting still in the middle of a moving one.
+    this.effects = new EffectBars(pixelRatio);
+    this.plane.add(this.effects.group);
 
     // Every readout carries a soft black halo. It replaces the gradients that
     // used to be laid across the top and bottom of the frame: those darkened a
@@ -379,6 +389,7 @@ export class Hud {
     this.weaponName.position.set(0, 22, 0);
     this.weaponHint.position.set(0, -2, 0);
 
+    this.effects.layout(height);
     this.centreMessage.position.set(width / 2, height * 0.56, 0);
     this.skipHint.position.set(width - MARGIN, MARGIN, 0);
 
@@ -515,6 +526,10 @@ export class Hud {
     this.skipHint.visible = this.introHint > 0.02;
     this.skipHint.setOpacity(this.introHint);
 
+    // Above the weapon panel, clear of it whether it is out or tucked away.
+    this.effects.update(player, dt, MARGIN + EFFECTS_ABOVE);
+    this.effects.setOpacity(this.raceChrome);
+
     this.weaponName.setOpacity(this.weaponSlide * this.raceChrome);
     this.weaponHint.setOpacity(this.weaponSlide * 0.85 * this.raceChrome);
 
@@ -596,6 +611,7 @@ export class Hud {
   dispose(): void {
     this.results.dispose();
     this.minimap.dispose();
+    this.effects.dispose();
     this.scene.traverse((object) => {
       if (object instanceof TextMesh) object.dispose();
       else if (object instanceof Mesh) {
