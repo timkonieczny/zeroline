@@ -1,0 +1,59 @@
+# Builds the circuit and publishes it to GitHub Pages.
+#
+# Pages rather than a host with a server behind it, because there is no server:
+# the whole game is a static bundle. It also gets HTTPS for nothing, which this
+# build does not merely prefer — WebGPU and the device-orientation events are
+# both secure-context only, so a plain http:// origin cannot run it at all.
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  # So a broken deploy can be re-run without an empty commit.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deploy at a time, and let a newer push overtake an older one that is
+# still running: the site should end up matching `main`, not whichever job
+# happened to finish last.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # Run as three steps rather than one so a failure says which gate it was.
+      # `npm run build` already typechecks, so nothing here is duplicated.
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
