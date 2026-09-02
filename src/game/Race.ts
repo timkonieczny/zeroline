@@ -2,7 +2,7 @@ import type { Track } from '@/track/Track';
 import { RacingLine } from '@/track/RacingLine';
 import type { Team } from '@/data/teams';
 import type { SpeedClass } from './Handling';
-import { Craft, CRAFT_HALF_LENGTH, CRAFT_HALF_WIDTH } from './Craft';
+import { Craft, CONTACT_HALF_LENGTH, CONTACT_RADIUS, CRAFT_HALF_LENGTH, CRAFT_HALF_WIDTH } from './Craft';
 import { placeOnGrid, respawn, stepCraft } from './Physics';
 import { Driver, skillForGridSlot } from './AI';
 import { copyInputSnapshot, createInputSnapshot, type InputSnapshot } from './InputSnapshot';
@@ -51,17 +51,6 @@ const THROTTLE_OPEN = 0.5;
 const AI_ABSORB_THRESHOLD = 0.45;
 /** Metres within which the AI will take a shot at the craft ahead. */
 const AI_FIRE_RANGE = 190;
-
-/**
- * The capsule a craft is shoved with: a segment of this half-length along its
- * forward axis, swept by this radius.
- *
- * The radius is the craft's half-width, so two abreast touch when their hulls
- * do. The segment makes up the rest of the length, so nose to tail they touch
- * at eight metres — the craft's own length — rather than at five.
- */
-const CONTACT_RADIUS = CRAFT_HALF_WIDTH;
-const CONTACT_HALF_LENGTH = CRAFT_HALF_LENGTH - CRAFT_HALF_WIDTH;
 
 const _delta = new Vector3();
 const _pointA = new Vector3();

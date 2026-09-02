@@ -223,6 +223,7 @@ export class RaceStage {
         craft.state.boost > 0 ? 1 : 0,
         1 - clamp01(craft.shieldFraction),
       );
+      model.setShield(craft.state.invulnerable);
     }
 
     const player = this.race.player;

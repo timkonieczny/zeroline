@@ -8,6 +8,17 @@ import type { HeldWeapon } from './weapons/Weapons';
 export const CRAFT_HALF_WIDTH = 2.4;
 export const CRAFT_HALF_LENGTH = 4.0;
 
+/**
+ * The capsule a craft is shoved with, and wears as a deflector: a segment of
+ * this half-length along its forward axis, swept by this radius.
+ *
+ * The radius is the craft's half-width, so two abreast touch when their hulls
+ * do. The segment makes up the rest of the length, so nose to tail they touch
+ * at eight metres — the craft's own length — rather than at five.
+ */
+export const CONTACT_RADIUS = CRAFT_HALF_WIDTH;
+export const CONTACT_HALF_LENGTH = CRAFT_HALF_LENGTH - CRAFT_HALF_WIDTH;
+
 export type CraftControl = 'player' | 'ai' | 'remote';
 
 /**

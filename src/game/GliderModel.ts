@@ -1,4 +1,14 @@
-import { AdditiveBlending, BufferAttribute, BufferGeometry, Color, DoubleSide, Group, Mesh, type Object3D } from 'three';
+import {
+  AdditiveBlending,
+  BufferAttribute,
+  BufferGeometry,
+  CapsuleGeometry,
+  Color,
+  DoubleSide,
+  Group,
+  Mesh,
+  type Object3D,
+} from 'three';
 import { MeshBasicNodeMaterial, MeshPhysicalNodeMaterial, MeshStandardNodeMaterial } from 'three/webgpu';
 import {
   color,
@@ -16,6 +26,7 @@ import {
 import { simTime } from '@/core/Clock';
 import type { HullSpec, Team } from '@/data/teams';
 import { clamp01, lerp } from '@/core/math';
+import { CONTACT_HALF_LENGTH, CONTACT_RADIUS } from './Craft';
 
 /**
  * Length the plume geometry is built at, in metres.
@@ -368,11 +379,18 @@ function buildFlames(hull: HullSpec): BufferGeometry {
  * assets, makes a new constructor a five-line change, and means the ships in the
  * menu and the ships on track are provably the same object.
  */
+/** How opaque the deflector bubble is at its strongest. */
+const SHIELD_OPACITY = 0.3;
+/** Seconds of deflector left over which it dissolves rather than snapping off. */
+const SHIELD_FADE = 0.5;
+
 export class GliderModel {
   readonly group = new Group();
   private readonly thrustUniform = uniform(0);
   private readonly boostUniform = uniform(0);
   private readonly damageUniform = uniform(0);
+  private readonly shieldOpacity = uniform(0);
+  private readonly shield: Mesh;
 
   constructor(readonly team: Team) {
     const hull = team.hull;
@@ -400,6 +418,20 @@ export class GliderModel {
     flames.renderOrder = 4;
     this.group.add(flames);
 
+    // The deflector, drawn as the shape the craft is actually shoved with — the
+    // capsule the contact solver uses, not an approximation of it. A bubble
+    // that does not match what it protects invites exactly the complaint the
+    // capsule was added to answer.
+    this.shield = new Mesh(
+      new CapsuleGeometry(CONTACT_RADIUS, CONTACT_HALF_LENGTH * 2, 6, 24).rotateX(Math.PI / 2),
+      this.shieldMaterial(),
+    );
+    this.shield.castShadow = false;
+    this.shield.receiveShadow = false;
+    this.shield.renderOrder = 5;
+    this.shield.visible = false;
+    this.group.add(this.shield);
+
     this.group.name = `glider:${team.id}`;
   }
 
@@ -408,6 +440,17 @@ export class GliderModel {
     this.thrustUniform.value = clamp01(thrust);
     this.boostUniform.value = clamp01(boost);
     this.damageUniform.value = clamp01(damage);
+  }
+
+  /**
+   * @param secondsLeft Deflector time remaining, or zero when there is none.
+   *   Passed rather than a flag so the bubble can dissolve on the way out
+   *   instead of vanishing between two frames.
+   */
+  setShield(secondsLeft: number): void {
+    const strength = clamp01(secondsLeft / SHIELD_FADE);
+    this.shieldOpacity.value = SHIELD_OPACITY * strength;
+    this.shield.visible = strength > 0.01;
   }
 
   get object(): Object3D {
@@ -421,6 +464,19 @@ export class GliderModel {
         (object.material as { dispose(): void }).dispose();
       }
     });
+  }
+
+  /** White glass, seen from both sides and writing no depth of its own. */
+  private shieldMaterial(): MeshBasicNodeMaterial {
+    const material = new MeshBasicNodeMaterial();
+    material.colorNode = color(0xffffff);
+    material.opacityNode = this.shieldOpacity;
+    material.transparent = true;
+    // Both halves of the bubble are drawn, and neither occludes the craft
+    // inside it or the other half of itself.
+    material.side = DoubleSide;
+    material.depthWrite = false;
+    return material;
   }
 
   /**
