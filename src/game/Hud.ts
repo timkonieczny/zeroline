@@ -119,6 +119,8 @@ export class Hud {
   private readonly minimap: Minimap;
   /** Fades the racing readouts down while the classification is up. */
   private raceChrome = 1;
+  /** Fades the skip hint with the shots it belongs to. */
+  private introHint = 0;
 
   private readonly speedValue: TextMesh;
   private readonly speedUnit: TextMesh;
@@ -131,6 +133,8 @@ export class Hud {
   private readonly weaponName: TextMesh;
   private readonly weaponHint: TextMesh;
   private readonly centreMessage: TextMesh;
+  /** Bottom right during the establishing shots, in the menu's own hint style. */
+  private readonly skipHint: TextMesh;
 
   private readonly shieldTrack: Mesh;
   private readonly shieldFill: Mesh;
@@ -201,6 +205,9 @@ export class Hud {
     this.weaponName = new TextMesh('', { size: 24, tracking: 0.24, align: 'centre', italic: true, shadow: HALO }, pixelRatio);
     this.weaponHint = new TextMesh('Space fire · Shift absorb', { size: 11, tracking: 0.3, align: 'centre', shadow: HALO }, pixelRatio);
     this.centreMessage = new TextMesh('', { size: 100, tracking: 0.2, align: 'centre', italic: true, shadow: HALO }, pixelRatio);
+    // Size, tracking and corner all match the menu's key hints, because it is
+    // the same promise to the player in the same place.
+    this.skipHint = new TextMesh('Enter skip', { size: 11, tracking: 0.36, align: 'right', shadow: HALO }, pixelRatio);
 
     this.positionValue.setColour(INK);
     this.positionOf.setColour(DIM);
@@ -208,6 +215,7 @@ export class Hud {
     this.speedUnit.setColour(DIM);
     this.bestLabel.setColour(DIM);
     this.weaponHint.setColour(DIM);
+    this.skipHint.setColour(DIM);
 
     // A darker, more opaque track behind it, so the fill has something to be
     // bright against wherever the circuit happens to be pale.
@@ -251,6 +259,11 @@ export class Hud {
     // hidden wholesale once the flag is out, and the finishing position is the
     // one thing that has to survive that.
     this.scene.add(this.centreMessage);
+
+    // Also outside `root`: it is offered while the racing chrome is away, which
+    // is the one time everything in `root` is hidden.
+    this.skipHint.visible = false;
+    this.scene.add(this.skipHint);
   }
 
   /**
@@ -367,6 +380,7 @@ export class Hud {
     this.weaponHint.position.set(0, -2, 0);
 
     this.centreMessage.position.set(width / 2, height * 0.56, 0);
+    this.skipHint.position.set(width - MARGIN, MARGIN, 0);
 
     this.plane.position.set(width / 2, height / 2, 0);
     this.measurePlane();
@@ -495,6 +509,12 @@ export class Hud {
     ]) {
       mesh.setOpacity(this.raceChrome);
     }
+    // Crossfades with the chrome rather than cutting, so the corner is never
+    // empty and never holds both.
+    this.introHint = lerp(this.introHint, this.cinematic ? 1 : 0, 1 - Math.exp(-dt * 7));
+    this.skipHint.visible = this.introHint > 0.02;
+    this.skipHint.setOpacity(this.introHint);
+
     this.weaponName.setOpacity(this.weaponSlide * this.raceChrome);
     this.weaponHint.setOpacity(this.weaponSlide * 0.85 * this.raceChrome);
 
