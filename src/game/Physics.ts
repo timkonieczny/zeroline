@@ -1,5 +1,5 @@
 import { Vector3 } from 'three';
-import { CRAFT_HALF_WIDTH, type Craft } from './Craft';
+import { CRAFT_HALF_WIDTH, type Craft, copyCraftSimState } from './Craft';
 import type { InputSnapshot } from './InputSnapshot';
 import type { Track } from '@/track/Track';
 import { TAU, clamp, clamp01, lerp } from '@/core/math';
@@ -236,6 +236,10 @@ export function respawn(craft: Craft, track: Track): void {
   st.grounded = true;
   st.respawnGrace = 2;
   craft.telemetry.impact = 1;
+
+  // A teleport, so the render must not blend across it: the craft would streak
+  // from the crash site to the respawn point for one frame.
+  copyCraftSimState(st, craft.previous);
 }
 
 /** Places a craft on its starting grid slot, stationary and on the line. */
@@ -269,4 +273,10 @@ export function placeOnGrid(craft: Craft, track: Track, slot: number): void {
   craft.hasStartedLap = false;
   craft.throttleOpenedAt = null;
   craft.startRating = null;
+
+  // Nothing has ticked when a race is built, so `previous` is still at its
+  // defaults and the renderer would blend the whole field in from the world
+  // origin. One tick used to hide it; the pre-race intro holds the simulation
+  // for twelve seconds and does not.
+  copyCraftSimState(st, craft.previous);
 }

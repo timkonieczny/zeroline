@@ -334,8 +334,10 @@ export class App {
     if (this.mode !== 'race' || !this.race) return;
     // Frozen, not slowed: the simulation is deterministic and stepping it at
     // all while nobody is driving would put the field somewhere the player
-    // did not leave it.
-    if (this.paused || this.transitioning) return;
+    // did not leave it. The intro is the same case — the countdown waits for
+    // the camera, so a shot of the circuit is a shot of the circuit and not of
+    // a race quietly getting under way behind it.
+    if (this.paused || this.transitioning || this.race.introducing) return;
 
     const race = this.race.race;
     this.race.tick(this.input.snapshot, step);
@@ -385,6 +387,13 @@ export class App {
           // had a moment to arrive.
           this.audio.menuConfirm();
           this.dismissResults();
+        }
+      } else if (this.race?.introducing) {
+        // Any of the menu keys cuts the intro short. It is three seconds a shot
+        // and nobody wants to sit through it on the twentieth attempt at a lap.
+        if (action === 'confirm' || action === 'back' || action === 'pause') {
+          this.audio.menuConfirm();
+          this.race.skipIntro();
         }
       } else if (this.paused) {
         const choice = this.race?.hud.pause.handle(action) ?? null;

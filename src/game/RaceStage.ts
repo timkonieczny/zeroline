@@ -10,6 +10,7 @@ import { Race, type RaceSetup } from './Race';
 import { GliderModel } from './GliderModel';
 import { WeaponVisuals } from './weapons/WeaponVisuals';
 import { ChaseCamera } from './ChaseCamera';
+import { RaceIntro } from './RaceIntro';
 import { Hud } from './Hud';
 import { Replay } from './Replay';
 import { createInputSnapshot } from './InputSnapshot';
@@ -52,6 +53,8 @@ export class RaceStage {
   private readonly skyline: Skyline;
   private readonly highway: SkyHighway;
   private readonly ordnance = new WeaponVisuals();
+  /** The shots before the lights, or null once they are done. */
+  private intro: RaceIntro | null = null;
   private readonly models = new Map<Craft, GliderModel>();
 
   /**
@@ -83,6 +86,7 @@ export class RaceStage {
     this.scene.add(this.ordnance.group);
 
     this.race = new Race({ ...setup, track: this.track });
+    this.intro = new RaceIntro(this.track, this.track.startS);
     this.hud = new Hud(pixelRatio, this.track, this.race.craft.length);
     this.replay = new Replay(this.race.craft.length);
     this.buildField();
@@ -101,6 +105,7 @@ export class RaceStage {
     this.settled = false;
     this.buildField();
     this.chase.reset();
+    this.intro = new RaceIntro(this.track, this.track.startS);
     this.hud.resetResults();
   }
 
@@ -162,6 +167,16 @@ export class RaceStage {
     }
   }
 
+  /** True while the intro owns the camera and the race is held. */
+  get introducing(): boolean {
+    return this.intro !== null;
+  }
+
+  /** Cuts the intro short, leaving it just enough to settle. */
+  skipIntro(): void {
+    this.intro?.skip();
+  }
+
   /** Places everything for this frame. `alpha` blends between the last two ticks. */
   /**
    * Places everything for this frame.
@@ -197,6 +212,18 @@ export class RaceStage {
     if (!this.replaying && player.telemetry.impact > 0) this.chase.impact(player.telemetry.impact);
 
     this.chase.update(camera, player, alpha, dt, lookingBack);
+
+    // After the chase, not instead of it: the orbit ends by blending onto
+    // wherever the chase camera has settled, so it has to know where that is.
+    if (this.intro) {
+      player.sampleRender(alpha, _position, _rotation);
+      this.intro.update(camera, this.track, _position, uiDt);
+      this.hud.cinematic = this.intro.cinematic;
+      if (!this.intro.active) {
+        this.intro = null;
+        this.hud.cinematic = false;
+      }
+    }
     this.environment.update(camera.position);
     this.highway.update(dt);
     this.ordnance.update(this.race.projectiles);

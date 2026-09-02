@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { Vector3 } from 'three';
+import { Quaternion, Vector3 } from 'three';
 import { Track } from '@/track/Track';
 import { meridianCoast } from '@/data/tracks/meridian-coast';
 import { Craft } from '@/game/Craft';
@@ -229,5 +229,37 @@ describe('handling profiles', () => {
     for (let i = 1; i < speeds.length; i++) {
       expect(speeds[i]!).toBeGreaterThan(speeds[i - 1]!);
     }
+  });
+});
+
+/**
+ * The renderer blends `previous` into `state`, so anything that teleports a
+ * craft has to move both. Unseeded on a fresh grid, the whole field draws
+ * somewhere between the world origin and the start line — invisible while the
+ * first tick was one frame away, obvious now the pre-race intro holds the
+ * simulation for twelve seconds.
+ */
+describe('render state across a teleport', () => {
+  it('seeds the previous state on the grid', () => {
+    const craft = makeCraft();
+
+    expect(craft.previous.position.distanceTo(craft.state.position)).toBe(0);
+    expect(craft.previous.s).toBe(craft.state.s);
+
+    // Which is the point: no blend, at any alpha.
+    const out = new Vector3();
+    craft.sampleRender(0, out, new Quaternion());
+    expect(out.distanceTo(craft.state.position)).toBe(0);
+  });
+
+  it('seeds it again on respawn', () => {
+    const craft = makeCraft();
+    run(craft, { ...createInputSnapshot(), thrust: 1 }, 2);
+    const before = craft.state.position.clone();
+
+    respawn(craft, track);
+
+    expect(craft.state.position.distanceTo(before)).toBeGreaterThan(0);
+    expect(craft.previous.position.distanceTo(craft.state.position)).toBe(0);
   });
 });

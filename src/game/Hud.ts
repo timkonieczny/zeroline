@@ -59,6 +59,13 @@ const HUD_GUARD = 6;
  * arrives. The table is the detail; the placard is the answer.
  */
 const PLACARD_TIME = 3;
+/**
+ * Highest number the countdown puts on screen.
+ *
+ * The count runs from four so the grid has a moment to settle before the
+ * numbers begin; the player is shown three of them.
+ */
+const COUNTDOWN_SHOWN = 3;
 /** Seconds the getaway verdict stays on screen after the lights. */
 const GETAWAY_TIME = 1.6;
 
@@ -160,6 +167,8 @@ export class Hud {
   private finishedFor = 0;
   /** Set while the player has asked for the table to be out of the way. */
   private tableHidden = false;
+  /** Set while the intro's establishing shots have the frame to themselves. */
+  cinematic = false;
 
   constructor(pixelRatio: number, track: Track, fieldSize: number) {
     this.scene.add(this.root);
@@ -469,7 +478,9 @@ export class Hud {
     // still wants to see the lap and the speed. They step aside only once the
     // table arrives, and come back if it is tucked away to watch the replay.
     const tableUp = race.finished && this.finishedFor > PLACARD_TIME && !this.tableHidden;
-    const wantChrome = tableUp ? 0 : 1;
+    // Nothing over the establishing shots: they are of the circuit, not of a
+    // race that has not started.
+    const wantChrome = tableUp || this.cinematic ? 0 : 1;
     this.raceChrome = lerp(this.raceChrome, wantChrome, 1 - Math.exp(-dt * 7));
     this.root.visible = this.raceChrome > 0.02;
     for (const mesh of [
@@ -490,9 +501,13 @@ export class Hud {
     // Centre message: the countdown, the lights going out, then the placard.
     let message = '';
     let placard = false;
-    if (race.phase === 'countdown') {
+    if (race.phase === 'countdown' && !this.cinematic) {
       const remaining = Math.ceil(race.countdown);
-      message = remaining > 0 ? String(remaining) : 'Go';
+      // The countdown is four seconds long and shows three numbers. The
+      // first of them is the tick between the lights coming on and the
+      // sequence starting, and a `4` on screen only makes the count look
+      // like it began a beat early.
+      message = remaining > COUNTDOWN_SHOWN ? '' : remaining > 0 ? String(remaining) : 'Go';
     } else if (race.finished && this.finishedFor < PLACARD_TIME + 0.4 && !this.tableHidden) {
       message = ordinal(player.position);
       placard = true;
