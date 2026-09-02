@@ -196,6 +196,13 @@ export function stepCraft(craft: Craft, input: InputSnapshot, track: Track, dt: 
     } else {
       tele.scraping = true;
     }
+    // The corner that touched, not the middle of the craft: out at the flank
+    // and level with the deck, which is where a barrier meets a hull.
+    tele.contact
+      .copy(st.position)
+      .addScaledVector(frame.right, side * CRAFT_HALF_WIDTH)
+      .addScaledVector(frame.up, 0.3);
+    tele.contactNormal.copy(frame.right).multiplyScalar(-side);
     hit = track.collision.query(st.position, st.s);
   }
 

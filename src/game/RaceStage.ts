@@ -12,6 +12,7 @@ import type { TrackDefinition } from '@/track/TrackTypes';
 import { COUNTDOWN, Race, type RaceSetup } from './Race';
 import { GliderModel } from './GliderModel';
 import { WeaponVisuals } from './weapons/WeaponVisuals';
+import { Sparks } from './Sparks';
 import { ChaseCamera } from './ChaseCamera';
 import { RaceIntro } from './RaceIntro';
 import { Hud } from './Hud';
@@ -59,6 +60,7 @@ export class RaceStage {
   private readonly markings: TrackMarkings;
   private readonly tunnelGlass: TunnelGlass;
   private readonly ordnance = new WeaponVisuals();
+  private readonly sparks = new Sparks();
   /** The shots before the lights, or null once they are done. */
   private intro: RaceIntro | null = null;
   private readonly models = new Map<Craft, GliderModel>();
@@ -99,6 +101,7 @@ export class RaceStage {
     this.scene.add(this.tunnelGlass.group);
 
     this.scene.add(this.ordnance.group);
+    this.scene.add(this.sparks.group);
 
     this.race = new Race({ ...setup, track: this.track });
     this.intro = new RaceIntro(this.track, this.track.startS);
@@ -243,6 +246,7 @@ export class RaceStage {
     this.highway.update(dt);
     this.startLine.update(1 - this.race.countdown / COUNTDOWN, this.race.time >= 0 ? this.race.time : -1);
     this.ordnance.update(this.race.projectiles);
+    this.sparks.update(this.race.craft, dt);
     this.hud.update(this.race, uiDt);
   }
 
@@ -261,6 +265,7 @@ export class RaceStage {
     this.markings.dispose();
     this.tunnelGlass.dispose();
     this.ordnance.dispose();
+    this.sparks.dispose();
     this.hud.dispose();
   }
 }

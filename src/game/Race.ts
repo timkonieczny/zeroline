@@ -9,6 +9,7 @@ import { copyInputSnapshot, createInputSnapshot, type InputSnapshot } from './In
 import { Rng } from '@/core/Rng';
 import { clamp01, lerp, wrapDelta } from '@/core/math';
 import { Vector3 } from 'three';
+import { closestOnAxes } from '@/core/Segments';
 import { Projectiles } from './weapons/Projectiles';
 import { rollWeapon, WEAPONS } from './weapons/Weapons';
 
@@ -51,7 +52,20 @@ const AI_ABSORB_THRESHOLD = 0.45;
 /** Metres within which the AI will take a shot at the craft ahead. */
 const AI_FIRE_RANGE = 190;
 
+/**
+ * The capsule a craft is shoved with: a segment of this half-length along its
+ * forward axis, swept by this radius.
+ *
+ * The radius is the craft's half-width, so two abreast touch when their hulls
+ * do. The segment makes up the rest of the length, so nose to tail they touch
+ * at eight metres — the craft's own length — rather than at five.
+ */
+const CONTACT_RADIUS = CRAFT_HALF_WIDTH;
+const CONTACT_HALF_LENGTH = CRAFT_HALF_LENGTH - CRAFT_HALF_WIDTH;
+
 const _delta = new Vector3();
+const _pointA = new Vector3();
+const _pointB = new Vector3();
 
 /**
  * One race: the field, the clock, the rules.
@@ -375,19 +389,41 @@ export class Race {
     }
   }
 
-  /** Craft-versus-craft contact: a shove, not a crash. */
+  /**
+   * Craft-versus-craft contact: a shove, not a crash.
+   *
+   * Each craft is a capsule lying along its own forward axis rather than a
+   * sphere. A sphere wide enough to keep two craft from overlapping side by
+   * side let a nose sit three metres inside the car ahead, and one long enough
+   * to stop that would not let two craft run abreast at all — eight metres by
+   * under five has no good radius. The capsule also fixes what the shove does:
+   * the normal now runs between the nearest points, so a rear-end shunt pushes
+   * along the road and a door rub pushes across it, instead of both pushing
+   * centre to centre.
+   *
+   * Twenty-eight pairs a tick at eight craft, each one a segment solve and no
+   * allocation. It does not show up in the headless lap times.
+   */
   private resolveContacts(): void {
     for (let i = 0; i < this.craft.length; i++) {
       for (let j = i + 1; j < this.craft.length; j++) {
         const a = this.craft[i]!;
         const b = this.craft[j]!;
-        _delta.subVectors(b.state.position, a.state.position);
-        const distance = _delta.length();
-        const minimum = CRAFT_HALF_WIDTH * 2.1;
-        if (distance > minimum || distance < 1e-4) continue;
 
-        _delta.multiplyScalar(1 / distance);
-        const overlap = minimum - distance;
+        const distance = closestOnAxes(
+          a.state.position,
+          a.state.forward,
+          CONTACT_HALF_LENGTH,
+          b.state.position,
+          b.state.forward,
+          CONTACT_HALF_LENGTH,
+          _pointA,
+          _pointB,
+        );
+        if (distance > CONTACT_RADIUS * 2 || distance < 1e-4) continue;
+
+        _delta.subVectors(_pointB, _pointA).multiplyScalar(1 / distance);
+        const overlap = CONTACT_RADIUS * 2 - distance;
         // Push apart by mass ratio, so the heavy car wins the argument.
         const total = a.handling.mass + b.handling.mass;
         a.state.position.addScaledVector(_delta, (-overlap * b.handling.mass) / total);
@@ -403,6 +439,12 @@ export class Race {
           b.applyDamage(damage * 6);
           a.telemetry.impact = Math.max(a.telemetry.impact, damage * 0.6);
           b.telemetry.impact = Math.max(b.telemetry.impact, damage * 0.6);
+
+          // Halfway between the two hulls, which is where the paint comes off.
+          a.telemetry.contact.addVectors(_pointA, _pointB).multiplyScalar(0.5);
+          b.telemetry.contact.copy(a.telemetry.contact);
+          a.telemetry.contactNormal.copy(_delta).multiplyScalar(-1);
+          b.telemetry.contactNormal.copy(_delta);
         }
       }
     }

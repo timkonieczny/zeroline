@@ -1,7 +1,7 @@
 import { DoubleSide, Group, Mesh, type BufferGeometry } from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { MeshStandardNodeMaterial } from 'three/webgpu';
-import { abs, float, fract, max, min, mix, normalView, positionViewDirection, smoothstep, uv, vec3 } from 'three/tsl';
+import { attribute, float, fract, max, min, mix, normalView, positionViewDirection, smoothstep, uv, vec3 } from 'three/tsl';
 import { buildRibbon, type ProfilePoint } from '../TrackRibbon';
 import { TUNNEL_RADIUS, TUNNEL_THICKNESS } from '../TrackGeometry';
 import type { Track } from '../Track';
@@ -13,6 +13,15 @@ import type { Track } from '../Track';
  * close enough that the tube still reads as one object from outside.
  */
 const DROP = 1.1;
+/**
+ * How thick the pane is, in metres.
+ *
+ * The tunnel shell is swept as a shell rather than a sheet, for the reason its
+ * own comment gives: at the portal you see its edge, and a sheet reads as a
+ * cardboard cut-out there. The glass is seen edge-on far more often than the
+ * shell is — it is the bottom of the tube — so it gets the same treatment.
+ */
+const THICKNESS = 0.55;
 /** Metres of arc length per glazing panel, and panels across the pane. */
 const PANEL_LENGTH = 7;
 const PANELS_ACROSS = 6;
@@ -24,9 +33,8 @@ const PANELS_ACROSS = 6;
  * aliasing artefact — the pane read as wireframe rather than as glass.
  */
 const SEAM = 0.035;
-
-/** How much of the pane the road slab covers overhead, as a fraction of its half-width. */
-const ROAD_SHARE = 0.78;
+/** How much of a seam survives on the underside, where the bars are not. */
+const UNDERSIDE_SEAM = 0.22;
 
 /** Opacity face-on and at a grazing angle. */
 const CLEAR = 0.34;
@@ -55,9 +63,20 @@ export class TunnelGlass {
     const half = TUNNEL_RADIUS + TUNNEL_THICKNESS;
 
     for (const tunnel of track.tunnels) {
+      // A closed rectangle in section: across the top, down the far edge, back
+      // across the underside, up the near edge and closed.
+      //
+      // `accent` marks which face a pixel is on. The glazing bars are fixed to
+      // the top of the pane, and drawing them on the underside too put a second
+      // grid half a metre below the first: seen through the glass at any angle
+      // the two slide across each other and read as diagonals rather than as
+      // structure.
       const profile: ProfilePoint[] = [
-        { anchor: 'centre', offset: -half, up: -DROP, u: 0 },
-        { anchor: 'centre', offset: half, up: -DROP, u: 1 },
+        { anchor: 'centre', offset: -half, up: -DROP, u: 0, accent: 1 },
+        { anchor: 'centre', offset: half, up: -DROP, u: 1, accent: 1 },
+        { anchor: 'centre', offset: half, up: -DROP - THICKNESS, u: 1, accent: 0 },
+        { anchor: 'centre', offset: -half, up: -DROP - THICKNESS, u: 0, accent: 0 },
+        { anchor: 'centre', offset: -half, up: -DROP, u: 0, accent: 1 },
       ];
       pieces.push(
         buildRibbon(track, {
@@ -86,44 +105,35 @@ export class TunnelGlass {
   }
 
   /**
-   * Glass, and what it is holding up.
+   * Glass.
    *
-   * Two things are happening. The pane is a dielectric at almost no roughness,
-   * so the sky probe gives it a real specular reflection, and a Fresnel term
-   * takes it from nearly clear face-on to nearly mirrored at a glancing angle —
-   * which is the angle it is almost always seen from, sitting under a road.
+   * A dielectric at almost no roughness, so the sky probe gives it a real
+   * specular reflection, and a Fresnel term takes it from nearly clear face-on
+   * to nearly mirrored at a glancing angle — which is the angle it is almost
+   * always seen from, sitting under a road.
    *
-   * The second is the reflection of the structure above it, which is not a
-   * reflection at all. What is overhead is a flat white slab of road in the
-   * middle and the arch's flanks at the edges, and a mirror of a flat uniform
-   * slab is that slab's colour: so it is drawn as a broad pale band across the
-   * middle of the pane, softened at the edge where the road ends and the sky
-   * takes back over, and scaled by the same Fresnel. Reflecting it honestly
-   * would mean a second render of the whole scene per frame, which on this
-   * circuit's budget buys nothing the band does not.
+   * It briefly also carried a pale band down the middle standing in for the
+   * road slab reflected in it. That was an approximation of something a real
+   * reflection would cost a second scene render to get, and at the sizes and
+   * angles the pane is actually seen at it was invisible. Gone.
    */
   private static material(): MeshStandardNodeMaterial {
     const material = new MeshStandardNodeMaterial();
 
     const coords = uv();
-    // Seams: the glazing bars between panels, in both directions.
+    // Seams: the glazing bars between panels, in both directions, and only
+    // really on the face they are bolted to.
     const acrossSeam = TunnelGlass.seam(coords.x.mul(PANELS_ACROSS));
     const alongSeam = TunnelGlass.seam(coords.y);
-    const bar = max(acrossSeam, alongSeam);
+    const onTop = attribute<'vec4'>('color', 'vec4').w;
+    const bar = max(acrossSeam, alongSeam).mul(mix(float(UNDERSIDE_SEAM), float(1), onTop));
 
     // 1 face-on, 0 edge-on.
     const facing = normalView.dot(positionViewDirection).abs().clamp(0, 1);
     const fresnel = facing.oneMinus().pow(2.6);
 
-    // How much of the road slab is overhead at this point across the pane.
-    const fromCentre = abs(coords.x.sub(0.5)).mul(2);
-    const underRoad = smoothstep(float(ROAD_SHARE), float(ROAD_SHARE - 0.16), fromCentre);
-
     const glass = vec3(0.42, 0.62, 0.68);
-    const slab = vec3(0.86, 0.89, 0.9);
-    const tinted = mix(glass, slab, underRoad.mul(fresnel).mul(0.75));
-
-    material.colorNode = mix(tinted, vec3(0.14, 0.17, 0.19), bar);
+    material.colorNode = mix(glass, vec3(0.14, 0.17, 0.19), bar);
     material.roughnessNode = mix(float(0.04), float(0.42), bar);
     material.metalnessNode = float(0);
     material.opacityNode = min(
@@ -131,6 +141,7 @@ export class TunnelGlass {
       mix(float(CLEAR), float(GRAZING), fresnel).add(bar.mul(0.62)),
     );
     material.transparent = true;
+    material.vertexColors = true;
     // The pane is seen from below as often as from above, and it is one sheet.
     material.side = DoubleSide;
     material.depthWrite = false;

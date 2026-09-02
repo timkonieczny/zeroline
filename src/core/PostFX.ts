@@ -105,8 +105,27 @@ const BLUR_REFERENCE_FRAME = 1 / 60;
  * and the tunnel stops being dark at all, which costs the exit its contrast.
  */
 const TUNNEL_EXPOSURE = 2.7;
+/**
+ * Where the exposure is driven for the first moment under cover.
+ *
+ * Below 1: the eye arrives stopped down for the sun outside, so a tunnel reads
+ * as a hole before it reads as a place. Without this the picture began lifting
+ * the instant the portal passed overhead and entering a tunnel felt like
+ * turning a light on.
+ */
+const ENTRY_DIP = 0.62;
+/** Seconds it stays there before the iris starts opening. */
+const ENTRY_DARK = 0.5;
+/**
+ * How fast it gets there.
+ *
+ * Fast. A pupil closes in a fraction of a second, and at the rate the eye opens
+ * again the dip only reached 0.87 before the iris took over — technically a dip
+ * and, at 400 km/h, not one anybody would notice.
+ */
+const ENTRY_RATE = 4.5;
 /** How fast the eye opens up in the dark, and closes again in the light. */
-const ADAPT_TO_DARK = 1.7;
+const ADAPT_TO_DARK = 1.5;
 /**
  * And how fast it closes again on the way out.
  *
@@ -219,6 +238,8 @@ export class PostFX {
   /** Scene exposure, eased by `setDrive` to stand in for the eye adapting. */
   private readonly exposure = uniform(1);
   private smoothedExposure = 1;
+  /** Seconds the camera has been under cover, for the entry shock. */
+  private enclosedFor = 0;
 
   /** Normalises the velocity buffer against a fixed reference frame time. */
   private readonly blurScale = uniform(1);
@@ -431,19 +452,24 @@ export class PostFX {
     this.speed.value = this.smoothedSpeed;
     this.boost.value = this.smoothedBoost;
 
-    // Dark adaptation is slow and light adaptation is quick, the way an eye
-    // actually works. Entering a tunnel, the picture lifts over about a second;
-    // leaving one, the world arrives already over-exposed and recovers in
-    // rather less — which is the moment the whole effect exists for.
-    const targetExposure = enclosed ? TUNNEL_EXPOSURE : 1;
-    const adaptRate = enclosed ? ADAPT_TO_DARK : ADAPT_TO_LIGHT;
+    // An eye going into a tunnel is still stopped down for the sun it just left,
+    // so the first thing that happens is that the tunnel looks *darker* than it
+    // is. Only then does the iris open, over a second or two, and that is what
+    // makes the exit blinding. Driving the exposure straight at its adapted
+    // value skipped the first half of that and lit the tunnel up on entry,
+    // which is the opposite of the sensation.
+    this.enclosedFor = enclosed ? this.enclosedFor + dt : 0;
+    const shocked = enclosed && this.enclosedFor < ENTRY_DARK;
+    const targetExposure = enclosed ? (shocked ? ENTRY_DIP : TUNNEL_EXPOSURE) : 1;
+    const adaptRate = shocked ? ENTRY_RATE : enclosed ? ADAPT_TO_DARK : ADAPT_TO_LIGHT;
     this.smoothedExposure += (targetExposure - this.smoothedExposure) * (1 - Math.exp(-dt * adaptRate));
     this.exposure.value = this.smoothedExposure;
 
-    // How far the eye is still open, 0..1. Inside the tunnel there is almost
-    // nothing over the threshold for the extra bloom to find, so this reads as
-    // an exit effect even though it is driven by the same number going in.
-    const glare = clamp01((this.smoothedExposure - 1) / (TUNNEL_EXPOSURE - 1));
+    // How far the eye is still open, 0..1 — and only once it is back outside.
+    // Under cover the same number is the tunnel being lit for a dark-adapted
+    // eye, and lifting the bloom with it blew out the strip lights and the
+    // portal ahead on the way *in*.
+    const glare = enclosed ? 0 : clamp01((this.smoothedExposure - 1) / (TUNNEL_EXPOSURE - 1));
     this.bloomStrength.value = this.baseBloom * (1 + GLARE_BLOOM_GAIN * glare);
 
     // Both effects stay at zero until well past half speed, so normal driving

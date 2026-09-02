@@ -111,6 +111,16 @@ export interface CraftTelemetry {
   hitBoostPad: boolean;
   /** True while scraping a wall. */
   scraping: boolean;
+  /**
+   * Where the last contact was, in world space, and the way the surface pushed.
+   *
+   * Only meaningful on a tick where `impact` or `scraping` says there was one.
+   * Carried here rather than worked out again by the renderer because the
+   * physics already knows it exactly, and a spark thrown from the middle of the
+   * craft instead of from the corner that hit reads as a bug.
+   */
+  contact: Vector3;
+  contactNormal: Vector3;
 }
 
 /**
@@ -138,6 +148,8 @@ export class Craft {
     speedFraction: 0,
     slip: 0,
     impact: 0,
+    contact: new Vector3(),
+    contactNormal: new Vector3(0, 1, 0),
     hitBoostPad: false,
     scraping: false,
   };
