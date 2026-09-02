@@ -241,14 +241,33 @@ export class Renderer {
    * the CSS size.
    */
   setBaseScale(scale: number): void {
-    const next = clamp(scale, MIN_SCALE, 1);
+    // Clamped to the ladder's own bottom rung, not to `MIN_SCALE`. The scaler's
+    // floor is 0.55 and the ladder reaches `1 / dpr` — 0.5 on a 2x display, a
+    // third on a 3x one — so clamping to 0.55 would render the lowest rungs at
+    // a resolution their own labels deny, two of them identically.
+    const floor = Math.min(this.ladder()[0]?.scale ?? MIN_SCALE, MIN_SCALE);
+    const next = clamp(scale, floor, 1);
     if (Math.abs(next - this.baseScale) < 0.005) return;
     this.baseScale = next;
+    // The scaler's room depends on the ceiling, so re-apply its own clamp
+    // before resizing rather than leaving it stale for a frame.
+    this.adaptiveScale = clamp(this.adaptiveScale, Math.min(1, MIN_SCALE / next), 1);
     this.applySize();
   }
 
+  /**
+   * Moves the adaptive multiplier, which rides under the player's ceiling.
+   *
+   * `MIN_SCALE` is a floor on the picture, not on this multiplier — it is the
+   * point past which dropping resolution costs more than the frame rate is
+   * worth. So the floor is applied to the product: the scaler may take the
+   * frame down to 0.55 of native and no further, whatever rung the player
+   * chose. Pick a rung at or below that and the scaler simply has no room,
+   * which is the right answer — the budget has already been spent by hand.
+   */
   setResolutionScale(scale: number): void {
-    const next = clamp(scale, MIN_SCALE, 1);
+    const floor = Math.min(1, MIN_SCALE / this.baseScale);
+    const next = clamp(scale, floor, 1);
     if (Math.abs(next - this.adaptiveScale) < 0.005) return;
     this.adaptiveScale = next;
     this.applySize();

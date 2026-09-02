@@ -61,3 +61,42 @@ describe('resolution ladder', () => {
     expect(nearestRung(rungs, 5)).toBe(rungs.length - 1);
   });
 });
+
+/**
+ * The two multipliers compose, and their floors have to compose with them.
+ *
+ * `MIN_SCALE` is a floor on the picture, not on the scaler's own number: the
+ * point past which dropping resolution costs more than the frame rate it buys.
+ * Applied to the scaler alone it stops meaning that the moment a player picks a
+ * ceiling — the bottom rung on a 2x display times a scaler at its floor is 0.275
+ * of native, half as sharp again as the floor was ever meant to allow.
+ *
+ * This is arithmetic over the same numbers the ladder produces, so it is pinned
+ * here rather than needing a renderer.
+ */
+describe('resolution floors', () => {
+  const MIN_SCALE = 0.55;
+  const effective = (base: number, adaptive: number): number =>
+    base * Math.max(Math.min(1, MIN_SCALE / base), Math.min(adaptive, 1));
+
+  it('never lets the picture fall below the floor', () => {
+    for (const dpr of [1, 1.5, 2, 3]) {
+      const bottom = resolutionLadder(1600, 900, dpr)[0]!.scale;
+      // The scaler asking for everything it can get.
+      const worst = effective(bottom, 0);
+      expect(worst, `dpr ${dpr}`).toBeGreaterThanOrEqual(Math.min(bottom, MIN_SCALE) - 1e-9);
+    }
+  });
+
+  it('leaves the scaler room under a high ceiling', () => {
+    // At native, the scaler still has its full range.
+    expect(effective(1, 0)).toBeCloseTo(MIN_SCALE, 6);
+  });
+
+  it('gives the scaler no room under a ceiling already past the floor', () => {
+    // A rung below the floor is the player spending the budget by hand; the
+    // scaler must not spend it twice.
+    expect(effective(0.5, 0)).toBeCloseTo(0.5, 6);
+    expect(effective(1 / 3, 0)).toBeCloseTo(1 / 3, 6);
+  });
+});

@@ -208,9 +208,9 @@ export class MenuStage {
   private readonly lists = new Map<MenuScreen, ListMenu>();
   private settingsList: OptionList | null = null;
 
-  /** Re-reads the settings rows, for any whose choices are not fixed. */
-  refreshSettings(): void {
-    this.settingsList?.refreshValues();
+  /** Pushes a rebuilt settings row into the list, for any whose choices are not fixed. */
+  updateSettingRow(row: OptionRow): void {
+    this.settingsList?.setRow(row);
   }
 
   private readonly statBars: StatBar[] = [];

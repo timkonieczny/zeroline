@@ -130,6 +130,10 @@ export class App {
     this.onStatus('Loading sky');
     await loadSkyTexture().catch(() => null);
 
+    // Before the settings rows are built: they seed the resolution row's index
+    // from the renderer's current ceiling, which is still 1 until this runs.
+    this.renderer.setBaseScale(this.settings.resolutionScale);
+
     this.onStatus('Building front end');
     this.menu = new MenuStage(this.pixelRatio(), this.buildSettingRows());
     this.menu.onStart = (selection) => {
@@ -154,7 +158,6 @@ export class App {
     window.addEventListener('keydown', this.onKeyDown);
     this.onResize();
 
-    this.renderer.setBaseScale(this.settings.resolutionScale);
     this.renderer.setAdaptive(this.settings.adaptiveResolution, this.settings.targetFps);
     this.loop.start();
   }
@@ -174,7 +177,7 @@ export class App {
     const ladder = this.renderer.ladder();
     this.resolutionRow.choices = ladder.map((rung) => rung.label);
     this.resolutionRow.index = this.renderer.currentRung();
-    this.menu?.refreshSettings();
+    this.menu?.updateSettingRow(this.resolutionRow);
   }
 
   private readonly onKeyDown = (event: KeyboardEvent): void => {

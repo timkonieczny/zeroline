@@ -123,13 +123,18 @@ export class OptionList extends Group {
   }
 
   /**
-   * Re-reads every row's current choice.
+   * Replaces one row's choices and current index, matched by label.
    *
    * For rows whose choices are not fixed: the resolution row's are built from
    * the window and the display's pixel ratio, so they change when the window is
-   * resized or moved to another monitor.
+   * resized or moved to another monitor. The list holds its own copy of every
+   * row, so mutating the caller's object is not enough — it has to be told.
    */
-  refreshValues(): void {
+  setRow(row: OptionRow): void {
+    const entry = this.rows.find((candidate) => candidate.row.label === row.label);
+    if (!entry || row.choices.length === 0) return;
+    entry.row.choices = row.choices;
+    entry.row.index = clamp(row.index, 0, row.choices.length - 1);
     this.refresh();
   }
 

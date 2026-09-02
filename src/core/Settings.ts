@@ -6,7 +6,6 @@ export interface GameSettings {
   quality: QualityLevel;
   /** Overrides the quality preset's antialiasing. */
   antialias: AntialiasMode;
-  /** Drop resolution under load to hold the frame budget. */
   /**
    * The resolution ceiling, as a multiplier on the display's pixel density.
    *
@@ -16,6 +15,7 @@ export interface GameSettings {
    * the nearest rung to this on whatever display it is asked about.
    */
   resolutionScale: number;
+  /** Drop resolution under load to hold the frame budget. */
   adaptiveResolution: boolean;
   /** Frame rate the adaptive scaler aims for. */
   targetFps: 60 | 120;
