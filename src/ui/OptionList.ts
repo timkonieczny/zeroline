@@ -2,6 +2,19 @@ import { Group, Mesh, PlaneGeometry } from 'three';
 import { TextMesh, panelMaterial } from './Text';
 import { clamp, lerp } from '@/core/math';
 import { DARK_UI, type UiPalette } from './Palette';
+import { rowAt } from './Widgets';
+
+/**
+ * Where the two chevrons sit, measured in from the list's right edge.
+ *
+ * Read off the positions they are drawn at rather than repeated: the left mark
+ * is at `width - 200` and the right at `width - 24`, 176 px apart, so a square
+ * target of 56 around each cannot overlap.
+ */
+const CHEVRON_LEFT_INSET = 200;
+const CHEVRON_RIGHT_INSET = 24;
+/** Side of a chevron's tap target, in pixels. The mark itself is far smaller. */
+const CHEVRON_TARGET = 56;
 
 export interface OptionRow {
   /** Setting name, shown on the left. */
@@ -83,8 +96,8 @@ export class OptionList extends Group {
 
       const left = new TextMesh('‹', { size: 20, tracking: 0, align: 'centre' }, pixelRatio);
       const right = new TextMesh('›', { size: 20, tracking: 0, align: 'centre' }, pixelRatio);
-      left.position.set(this.width - 200, 0, 0);
-      right.position.set(this.width - 24, 0, 0);
+      left.position.set(this.width - CHEVRON_LEFT_INSET, 0, 0);
+      right.position.set(this.width - CHEVRON_RIGHT_INSET, 0, 0);
       left.setColour(palette.dim);
       right.setColour(palette.dim);
 
@@ -103,6 +116,38 @@ export class OptionList extends Group {
   /** Current state of every row, for persisting. */
   get values(): OptionRow[] {
     return this.rows.map((r) => ({ ...r.row }));
+  }
+
+  /**
+   * Selects a row outright, for a finger that went straight to it.
+   *
+   * Clamped rather than wrapped, unlike `move`: a tap names a row, and there is
+   * no direction for it to have run off the end of.
+   */
+  select(index: number): void {
+    if (this.rows.length === 0) return;
+    // The highlight eases toward `index` in `update`, exactly as it does for
+    // `move`, so a tap gets the same slide a key press does.
+    this.index = clamp(Math.round(index), 0, this.rows.length - 1);
+  }
+
+  /** Row under a point in overlay pixels, or -1. */
+  hitTest(x: number, y: number): number {
+    return rowAt(x - this.position.x, y - this.position.y, this.width, this.rowHeight, this.rows.length);
+  }
+
+  /**
+   * Which chevron a point is on: -1 for the left one, 1 for the right, 0 for
+   * neither. Taken before the row test, so the arrows win inside their square.
+   */
+  hitChevron(x: number, y: number): -1 | 0 | 1 {
+    const index = this.hitTest(x, y);
+    if (index < 0) return 0;
+
+    const localX = x - this.position.x;
+    if (Math.abs(localX - (this.width - CHEVRON_LEFT_INSET)) <= CHEVRON_TARGET / 2) return -1;
+    if (Math.abs(localX - (this.width - CHEVRON_RIGHT_INSET)) <= CHEVRON_TARGET / 2) return 1;
+    return 0;
   }
 
   move(delta: number): void {

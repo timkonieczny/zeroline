@@ -2,7 +2,10 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, user-scalable=no, viewport-fit=cover"
+    />
     <title>ZEROLINE</title>
     <meta name="description" content="ZEROLINE — anti-gravity racing. Find the line." />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -19,6 +22,42 @@
       <div id="curtain-mark">ZEROLINE</div>
       <div id="curtain-status">Loading</div>
     </div>
+    <!--
+      Landscape only, and the prompt that enforces it.
+
+      Shown by a media query rather than by script: no state to keep in step
+      with the real orientation, and it is right on the very first paint rather
+      than one frame later.
+    -->
+    <div id="rotate">
+      <div id="rotate-mark">ZEROLINE</div>
+      <div id="rotate-phone"></div>
+      <div id="rotate-status">Turn your phone sideways</div>
+    </div>
+    <!--
+      Motion access, which the race cannot start without.
+
+      Blocking was a deliberate choice over a touch-steering fallback. iOS
+      remembers a refusal per site and never prompts again, so the copy has to
+      tell the player where the switch is — a retry button that silently does
+      nothing is worse than no button.
+    -->
+    <div id="motion" class="hidden">
+      <div id="motion-mark">ZEROLINE</div>
+      <p id="motion-copy">
+        ZEROLINE steers by tilting your phone, so it needs motion access to start.
+      </p>
+      <p id="motion-help">
+        If nothing happens when you try again, Safari has remembered an earlier refusal.
+        Open <b>aA</b> in the address bar, then Website Settings, then Motion &amp; Orientation
+        Access. On Chrome it is under Site settings, Motion sensors.
+      </p>
+      <div id="motion-actions">
+        <button id="motion-retry" type="button">Try again</button>
+        <button id="motion-reload" type="button">Reload</button>
+      </div>
+    </div>
+    <button id="fullscreen" type="button" hidden>Fullscreen</button>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

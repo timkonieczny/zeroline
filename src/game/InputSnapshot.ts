@@ -71,3 +71,23 @@ export function copyInputSnapshot(from: InputSnapshot, to: InputSnapshot): void 
   to.barrelRoll = from.barrelRoll;
   to.lookBack = from.lookBack;
 }
+
+/**
+ * Clears the fields that mean "this tick and no other", once a tick has had them.
+ *
+ * The interface above promises the three edges are set for exactly one tick.
+ * They were set for exactly one *frame*, which is not the same thing: the loop
+ * runs up to six ticks between two renders, and every one of them saw the same
+ * `fire`. A three-round weapon emptied itself in a single frame at thirty
+ * frames a second and behaved perfectly at a hundred and twenty, which is the
+ * shape of a bug nobody finds on a desktop.
+ *
+ * It is also a determinism fault, and that is the stronger reason: how far a
+ * sideshift threw you depended on the frame rate of the machine watching.
+ */
+export function consumeInputEdges(input: InputSnapshot): void {
+  input.fire = false;
+  input.absorb = false;
+  input.sideshift = 0;
+  input.barrelRoll = 0;
+}

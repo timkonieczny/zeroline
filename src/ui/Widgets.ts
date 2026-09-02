@@ -5,6 +5,9 @@ import { TextMesh, panelMaterial } from './Text';
 import { clamp, lerp } from '@/core/math';
 import { DARK_UI, type UiPalette } from './Palette';
 
+/** Pixels the selected row slides to the right. */
+const ROW_SLIDE = 14;
+
 export interface ListItem {
   /** Line shown in the list. */
   label: string;
@@ -22,6 +25,31 @@ export interface ListItem {
  * work: at a glance it tells you which way the cursor just moved, which matters
  * when the only input is a d-pad.
  */
+/**
+ * Which row of a list a point falls on, in list-local pixels, or -1.
+ *
+ * Derived from the index rather than from where the row currently *is*: the
+ * selected row slides 14 px to the right and the highlight eases between rows,
+ * so a raycast would test an animation mid-flight and a tap could miss a row
+ * for having arrived at the wrong moment. The rectangle is where the row is
+ * defined to be.
+ */
+export function rowAt(
+  localX: number,
+  localY: number,
+  width: number,
+  rowHeight: number,
+  count: number,
+): number {
+  // The nudge the selected row takes, given back on the left so the hit box
+  // covers the row wherever in that slide it happens to be.
+  if (localX < -ROW_SLIDE || localX > width) return -1;
+
+  const index = Math.round(-localY / rowHeight);
+  if (index < 0 || index >= count) return -1;
+  return Math.abs(-localY - index * rowHeight) <= rowHeight / 2 ? index : -1;
+}
+
 export class ListMenu extends Group {
   private readonly rows: { group: Group; label: TextMesh; detail: TextMesh | null; locked: boolean }[] = [];
   private readonly highlight: Mesh;
@@ -101,6 +129,13 @@ export class ListMenu extends Group {
     return false;
   }
 
+  /** Row under a point in overlay pixels, or -1. Locked rows never answer. */
+  hitTest(x: number, y: number): number {
+    const index = rowAt(x - this.position.x, y - this.position.y, this.width, this.rowHeight, this.rows.length);
+    if (index < 0) return -1;
+    return this.rows[index]!.locked ? -1 : index;
+  }
+
   select(index: number): void {
     if (index >= 0 && index < this.rows.length && !this.rows[index]!.locked) this.index = index;
   }
@@ -116,7 +151,7 @@ export class ListMenu extends Group {
 
     this.rows.forEach((row, i) => {
       const nearness = clamp(1 - Math.abs(i - shown), 0, 1);
-      row.group.position.x = lerp(0, 14, nearness);
+      row.group.position.x = lerp(0, ROW_SLIDE, nearness);
       const selected = i === this.index;
       // Selected is blue, everything else is the one dark grey. Dimming the
       // rest as well made the list read as mostly disabled.

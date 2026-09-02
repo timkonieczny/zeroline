@@ -67,6 +67,11 @@ export class Renderer {
   /** What the GPU we ended up on calls itself. Shown on the F3 overlay. */
   private adapterName = 'unknown';
 
+  /** What the backbuffer was last built for, so an idle resize costs nothing. */
+  private sizedWidth = 0;
+  private sizedHeight = 0;
+  private sizedDensity = 0;
+
   private currentDpr = 1;
   private dprQuery: MediaQueryList | null = null;
   private readonly onDprChange = (): void => this.watchPixelRatio();
@@ -220,7 +225,19 @@ export class Renderer {
   private applySize(): void {
     const width = window.innerWidth;
     const height = window.innerHeight;
-    this.renderer.setPixelRatio(this.currentDpr * this.baseScale * this.adaptiveScale);
+    const density = this.currentDpr * this.baseScale * this.adaptiveScale;
+
+    // A phone fires `resize` on every rotation and on every show and hide of
+    // the URL bar, and most of that storm ends where it started. Reallocating
+    // the backbuffer also reallocates every render target in the post chain
+    // behind it, which is far too much to do for a number that has not moved.
+    if (width === this.sizedWidth && height === this.sizedHeight && density === this.sizedDensity) {
+      return;
+    }
+    this.sizedWidth = width;
+    this.sizedHeight = height;
+    this.sizedDensity = density;
+    this.renderer.setPixelRatio(density);
     this.renderer.setSize(width, height, true);
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();

@@ -4,6 +4,18 @@
   --accent: #0072a8;
   --panel: rgba(8, 12, 16, 0.72);
   color-scheme: light;
+
+  /*
+   * What the hardware is covering, republished as plain custom properties.
+   *
+   * `env()` cannot be read from script, and a fire button under a notch is a
+   * fire button that does not exist. Everything that needs to lay out around a
+   * phone's chin or camera reads these back through `Platform.safeAreaInsets`.
+   */
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
 }
 
 * {
@@ -21,6 +33,20 @@ body {
   color: var(--ink);
   font-family: 'Geo', 'Segoe UI', 'SF Pro Display', system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
+  /*
+   * The whole page, not just the canvas.
+   *
+   * `touch-action` was on `canvas#view` alone, which is fine until there is a
+   * DOM control over it: a drag that starts on a button still scrolled the page
+   * and bounced it. On a game that is played by holding two pads down, every
+   * one of these is the difference between a control and a gesture the browser
+   * decided to keep for itself.
+   */
+  touch-action: none;
+  overscroll-behavior: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 canvas#view {
@@ -136,4 +162,179 @@ canvas#view {
 
 #perf[hidden] {
   display: none;
+}
+
+/*
+ * The landscape gate.
+ *
+ * Above everything, including a boot error: there is nothing worth reading on a
+ * phone held the wrong way round. It exists only for coarse pointers — a narrow
+ * desktop window is somebody resizing a browser, not somebody holding a phone,
+ * and telling them to rotate their monitor would be absurd.
+ */
+#rotate {
+  display: none;
+  position: fixed;
+  inset: 0;
+  place-content: center;
+  justify-items: center;
+  gap: 1.4rem;
+  padding: 2rem;
+  background: #eef3f7;
+  z-index: 30;
+}
+
+@media (orientation: portrait) and (pointer: coarse) and (hover: none) {
+  #rotate {
+    display: grid;
+  }
+}
+
+#rotate-mark {
+  font-size: clamp(1.8rem, 8vw, 3.2rem);
+  font-style: italic;
+  letter-spacing: 0.38em;
+  text-indent: 0.38em;
+  color: #0b1219;
+}
+
+/*
+ * The phone, drawn rather than drawn *in*: a rounded rectangle turning a
+ * quarter turn and back. This game ships no image files, and a rotate icon is
+ * not the place to start.
+ */
+#rotate-phone {
+  width: 3.4rem;
+  height: 6rem;
+  border: 2px solid var(--ink-dim);
+  border-radius: 0.6rem;
+  animation: rotate-hint 2.6s ease-in-out infinite;
+}
+
+@keyframes rotate-hint {
+  0%,
+  28% {
+    transform: rotate(0deg);
+  }
+  55%,
+  88% {
+    transform: rotate(-90deg);
+  }
+  100% {
+    transform: rotate(0deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #rotate-phone {
+    animation: none;
+    transform: rotate(-90deg);
+  }
+}
+
+#rotate-status {
+  font-size: 0.78rem;
+  letter-spacing: 0.3em;
+  text-indent: 0.3em;
+  color: #5d6b78;
+  text-align: center;
+}
+
+/*
+ * The fullscreen button, on touch devices only — `hidden` until script decides
+ * this is a phone and that the browser will honour the request at all.
+ *
+ * Below the curtain, so it cannot be pressed while a circuit is loading, and
+ * inside the safe area so a home indicator never sits on top of it.
+ */
+#fullscreen {
+  position: fixed;
+  right: calc(var(--safe-right) + 0.9rem);
+  bottom: calc(var(--safe-bottom) + 0.9rem);
+  padding: 0.55rem 0.95rem;
+  border: 1px solid var(--ink-dim);
+  border-radius: 0.35rem;
+  background: rgba(238, 243, 247, 0.82);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 0.7rem;
+  letter-spacing: 0.24em;
+  text-indent: 0.24em;
+  z-index: 12;
+  backdrop-filter: blur(6px);
+}
+
+#fullscreen[hidden] {
+  display: none;
+}
+
+/*
+ * The motion-access card.
+ *
+ * Above the curtain and the boot card, below the rotate gate: a phone held the
+ * wrong way round has a more immediate problem than a permission.
+ */
+#motion {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 1.1rem;
+  padding: 2rem;
+  max-width: 34rem;
+  margin: 0 auto;
+  background: #eef3f7;
+  z-index: 25;
+  transition: opacity 260ms ease;
+}
+
+#motion.hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+#motion-mark {
+  font-size: clamp(1.6rem, 6vw, 2.6rem);
+  font-style: italic;
+  letter-spacing: 0.38em;
+  text-indent: 0.38em;
+  color: #0b1219;
+}
+
+#motion-copy {
+  font-size: 0.95rem;
+  line-height: 1.6;
+  text-align: center;
+  color: var(--ink);
+}
+
+#motion-help {
+  font-size: 0.78rem;
+  line-height: 1.7;
+  text-align: center;
+  color: var(--ink-dim);
+}
+
+#motion-actions {
+  display: flex;
+  gap: 0.7rem;
+}
+
+#motion button,
+#fullscreen {
+  padding: 0.55rem 0.95rem;
+  border: 1px solid var(--ink-dim);
+  border-radius: 0.35rem;
+  background: rgba(238, 243, 247, 0.82);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 0.7rem;
+  letter-spacing: 0.24em;
+  text-indent: 0.24em;
+}
+
+#fullscreen:disabled {
+  border-style: dashed;
+  color: var(--ink-dim);
 }

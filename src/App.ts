@@ -1,4 +1,5 @@
 import { Quaternion, Vector3 } from 'three';
+import { clamp } from '@/core/math';
 import { Renderer } from '@/core/Renderer';
 import { Loop } from '@/core/Loop';
 import { Input } from '@/core/Input';
@@ -7,9 +8,12 @@ import { MenuStage, type MenuSelection } from '@/menu/MenuStage';
 import { RaceStage } from '@/game/RaceStage';
 import { loadTrack, type LoadedTrack } from '@/track/TrackLoader';
 import { TEAMS, type Team } from '@/data/teams';
+import { consumeInputEdges } from '@/game/InputSnapshot';
 import { Audio } from '@/core/Audio';
+import { IS_TOUCH_DEVICE } from '@/core/Platform';
+import { Touch, type TouchMode } from '@/core/Touch';
 import { AudioDirector } from '@/game/AudioDirector';
-import { loadSettings, saveSettings, type GameSettings } from '@/core/Settings';
+import { hasStoredSettings, loadSettings, saveSettings, type GameSettings } from '@/core/Settings';
 import type { OptionRow } from '@/ui/OptionList';
 import { loadUiFont } from '@/ui/Fonts';
 import { loadSkyTexture } from '@/track/scenery/SkyTexture';
@@ -37,6 +41,30 @@ const RESULTS_GRACE = 0.8;
  * the setting rather than the text.
  */
 const QUALITY_ORDER: readonly GameSettings['quality'][] = ['low', 'medium', 'high', 'ultra'];
+
+/**
+ * The viewport the interface was drawn for, in logical pixels.
+ *
+ * Every layout constant in the menu and the HUD was chosen against a desktop
+ * window: the menu's detail column starts 544 px in and the longest craft blurb
+ * runs about 575 px past it, so the front end wants a little over eleven
+ * hundred pixels across. A landscape phone has about eight hundred and fifty.
+ */
+const REFERENCE_WIDTH = 1120;
+const REFERENCE_HEIGHT = 560;
+/** Below this the type stops being readable, so the layout is left to crowd. */
+const MIN_UI_SCALE = 0.62;
+
+/**
+ * How many logical pixels one CSS pixel is worth.
+ *
+ * Exactly 1 for any window at least the reference size, which is every desktop
+ * window worth the name — so this is a no-op on the platform that must not
+ * change, and that is the property that makes it the right lever.
+ */
+function uiScale(width: number, height: number): number {
+  return clamp(Math.min(1, width / REFERENCE_WIDTH, height / REFERENCE_HEIGHT), MIN_UI_SCALE, 1);
+}
 
 /** Longest the loading screen waits on the driver's compile, in ms. */
 const PRECOMPILE_HOLD = 900;
@@ -95,6 +123,9 @@ export class App {
   private transitioning = false;
   /** True while the pause panel is up. */
   private paused = false;
+  /** The phone's thumbs and tilt, or null on a desktop. */
+  private touch: Touch | null = null;
+  private readonly motionGate = document.getElementById('motion');
   private readonly curtain = document.getElementById('curtain');
   private readonly curtainStatus = document.getElementById('curtain-status');
   /** True once the classification is animating away and the menu is next. */
@@ -103,8 +134,25 @@ export class App {
   private readonly perf: HTMLElement;
   private perfTimer = 0;
 
+  /** What the last layout was built for, so an unchanged resize costs nothing. */
+  private laidOutWidth = 0;
+  private laidOutHeight = 0;
+  private laidOutRatio = 0;
+  /** Logical pixels per CSS pixel. 1 on any desktop window. */
+  private uiScale = 1;
+  /** True while the phone is the wrong way round and the card is over the game. */
+  private portrait = false;
+
   constructor(private readonly onStatus: (text: string) => void) {
     this.settings = loadSettings();
+    // A phone's first run, before it has an opinion. This chain costs 35 ms a
+    // frame on a weak laptop iGPU at its lowest rung; a handheld is not going
+    // to do better, and a player whose first impression is six frames a second
+    // never gets as far as the settings screen.
+    if (IS_TOUCH_DEVICE && !hasStoredSettings()) {
+      this.settings.quality = 'low';
+      this.settings.adaptiveResolution = true;
+    }
     this.audio.setMix(this.settings.mix);
 
     this.perf = document.createElement('div');
@@ -159,6 +207,8 @@ export class App {
 
     document.body.appendChild(this.perf);
     this.input.attach();
+    this.attachTouch();
+    this.watchOrientation();
     window.addEventListener('resize', this.onResize);
     window.addEventListener('keydown', this.onKeyDown);
     this.onResize();
@@ -168,9 +218,32 @@ export class App {
   }
 
   private readonly onResize = (): void => {
+    const width = window.innerWidth;
+    const height = window.innerHeight;
     const ratio = this.pixelRatio();
-    this.menu.resize(window.innerWidth, window.innerHeight, ratio);
-    this.race?.resize(window.innerWidth, window.innerHeight, ratio);
+
+    // iOS fires `resize` on every rotation and on every show and hide of the
+    // URL bar, and each one below re-rasterises every label in the menu and the
+    // HUD. Most of that storm ends exactly where it started.
+    if (width === this.laidOutWidth && height === this.laidOutHeight && ratio === this.laidOutRatio) {
+      return;
+    }
+    this.laidOutWidth = width;
+    this.laidOutHeight = height;
+    this.laidOutRatio = ratio;
+
+    // The interface is authored against a desktop window and a phone is not
+    // one, so it is handed *more logical pixels* rather than being squeezed:
+    // the layout is unchanged and the camera covers more of it. Rasterising at
+    // `ratio * scale` keeps every glyph exactly as sharp as it was, since a
+    // label covering fewer real pixels is drawn into fewer real pixels.
+    const scale = uiScale(width, height);
+    const logicalRatio = Math.min(2.5, ratio * scale);
+
+    this.menu.resize(width / scale, height / scale, logicalRatio);
+    this.race?.resize(width / scale, height / scale, logicalRatio);
+    this.uiScale = scale;
+
     // The resolution row's choices are the window's own sizes, so they are
     // wrong the moment the window is not that size any more.
     this.refreshResolutionRow();
@@ -362,6 +435,7 @@ export class App {
   }
 
   private tick(step: number): void {
+    if (this.portrait) return;
     if (this.mode !== 'race' || !this.race) return;
     // Frozen, not slowed: the simulation is deterministic and stepping it at
     // all while nobody is driving would put the field somewhere the player
@@ -372,6 +446,8 @@ export class App {
 
     const race = this.race.race;
     this.race.tick(this.input.snapshot, step);
+    // One tick got the edges; the other five in this frame must not.
+    consumeInputEdges(this.input.snapshot);
 
     if (race.finished) {
       this.finishedFor += step;
@@ -382,6 +458,9 @@ export class App {
   }
 
   private render(alpha: number, frameTime: number): void {
+    // Nothing to draw behind an opaque card, and no GPU work worth doing.
+    if (this.portrait) return;
+
     // Explicitly, rather than relying on three's own animation loop to do it.
     // That loop is started unconditionally by `renderer.init()` and does reset
     // the counters every frame, so the overlay's figures were already per-frame
@@ -389,6 +468,8 @@ export class App {
     // not drive its rendering from it, so leaning on its bookkeeping is a
     // dependency waiting to be surprised by.
     this.renderer.renderer.info.reset();
+    this.armTouch();
+    this.touch?.update(frameTime);
     this.input.update(frameTime);
 
     if (this.transitioning) this.input.clearMenuActions();
@@ -517,6 +598,180 @@ export class App {
   }
 
   /** The settings screen's rows, seeded from what was last saved. */
+  /** Builds the phone's input layer, on a phone. */
+  private attachTouch(): void {
+    if (!IS_TOUCH_DEVICE) return;
+
+    this.touch = new Touch({
+      target: this.renderer.canvas,
+      input: this.input,
+      onFirstGesture: () => this.onFirstGesture(),
+      onTap: (x, y) => this.onTouchTap(x, y),
+      regions: () => this.race?.hud.touchRegions ?? [],
+      setPressed: (id, pressed) => this.race?.hud.setTouchPressed(id, pressed),
+    });
+    this.touch.attach();
+
+    this.setupFullscreen();
+    this.setupMotionGate();
+  }
+
+  /**
+   * The one place iOS will grant anything.
+   *
+   * Both of these have to happen inside the gesture's own call stack. The
+   * action loop's `audio.resume()` runs in a frame callback, which Safari
+   * refuses — so on a phone this is what actually unlocks the sound.
+   */
+  private onFirstGesture(): void {
+    void this.audio.resume().then(() => this.audio.startAmbience());
+    this.touch?.requestMotion();
+  }
+
+  /** A tap that no race control claimed, in CSS pixels from the top left. */
+  private onTouchTap(x: number, y: number): void {
+    // The action loop already throws queued actions away behind the curtain,
+    // and a tap dispatched straight at the menu would walk through that guard.
+    if (this.transitioning) return;
+
+    // Both overlays put the origin at the bottom left, and both work in the
+    // logical pixels the scale handed them rather than in the screen's own.
+    const overlayX = x / this.uiScale;
+    const overlayY = (window.innerHeight - y) / this.uiScale;
+
+    if (this.mode === 'menu') {
+      this.menu.tap(overlayX, overlayY);
+      return;
+    }
+    if (this.paused) {
+      const choice = this.race?.hud.pause.tap(overlayX, overlayY) ?? null;
+      if (choice === 'resume') {
+        this.audio.menuBack();
+        this.race?.hud.pause.hide();
+        this.paused = false;
+      } else if (choice === 'quit') {
+        this.audio.menuConfirm();
+        this.returnToMenu();
+      }
+      return;
+    }
+    if (this.race?.race.finished) {
+      if (this.finishedFor > RESULTS_GRACE) this.input.pushMenuAction('confirm');
+      return;
+    }
+    if (this.race?.introducing) this.input.pushMenuAction('confirm');
+  }
+
+  /**
+   * Points the touch layer at whatever surface is in front of the player.
+   *
+   * A change releases every held finger: a thumb still on the brake when the
+   * pause panel opens must not still be braking when it closes.
+   */
+  private armTouch(): void {
+    const touch = this.touch;
+    if (!touch) return;
+
+    const racing = this.mode === 'race' && !!this.race && !this.paused && !this.race.race.finished;
+    const next: TouchMode = this.transitioning
+      ? 'held'
+      : racing && !this.race?.introducing
+        ? 'race'
+        : this.mode === 'menu'
+          ? 'menu'
+          : 'held';
+
+    if (next !== touch.mode) {
+      touch.releaseAll();
+      // The lights are the moment the phone is settled in the player's hands,
+      // and the last moment before any of this matters.
+      if (next === 'race') touch.recentre();
+      touch.mode = next;
+    }
+
+    touch.launching = this.race?.race.phase === 'countdown';
+
+    // No motion, no steering. The card is up and nothing is driving until it
+    // is granted — which is the choice that was made over a touch fallback.
+    const blocked = touch.motion === 'denied' || touch.motion === 'unavailable';
+    this.gate(this.motionGate, blocked);
+    if (blocked) touch.mode = 'held';
+  }
+
+  /**
+   * Holds the game while the phone is upright.
+   *
+   * The card itself is pure CSS, so it is right on the first paint and cannot
+   * fall out of step with the real orientation. This is only the other half:
+   * rendering WebGPU frames nobody can see is the one place on a phone where
+   * the battery is genuinely worth saving. Kept separate deliberately — if this
+   * listener ever fails, it costs power rather than correctness.
+   */
+  private watchOrientation(): void {
+    if (!IS_TOUCH_DEVICE) return;
+
+    const query = window.matchMedia('(orientation: portrait)');
+    const apply = (): void => {
+      this.portrait = query.matches;
+      if (this.portrait) this.audio.setEngineMuted(true);
+    };
+    query.addEventListener('change', apply);
+    apply();
+  }
+
+  /** The two buttons on the motion card, which must ask from a real gesture. */
+  private setupMotionGate(): void {
+    document.getElementById('motion-retry')?.addEventListener('click', () => {
+      this.touch?.requestMotion();
+    });
+    document.getElementById('motion-reload')?.addEventListener('click', () => {
+      window.location.reload();
+    });
+  }
+
+  /** Shows or hides one of the shell's full-frame cards. */
+  private gate(element: HTMLElement | null, shown: boolean): void {
+    element?.classList.toggle('hidden', !shown);
+  }
+
+  /**
+   * The fullscreen control.
+   *
+   * A DOM button rather than something in the overlay, because it has to work
+   * before a race exists and it is chrome rather than game. iPhone Safari does
+   * not implement the Fullscreen API at all, so where it is missing the button
+   * says the one thing that does work there instead.
+   */
+  private setupFullscreen(): void {
+    const button = document.getElementById('fullscreen') as HTMLButtonElement | null;
+    if (!button) return;
+
+    const supported = typeof document.documentElement.requestFullscreen === 'function';
+    button.hidden = false;
+    button.textContent = supported ? 'Fullscreen' : 'Add to Home Screen';
+    button.disabled = !supported;
+
+    if (supported) {
+      button.addEventListener('click', () => {
+        void document.documentElement
+          .requestFullscreen()
+          // Only Chromium honours this, and only once the document is already
+          // fullscreen — which is why it is chained rather than called on its
+          // own. WebKit has no `lock` at all, so the rejection is expected.
+          .then(() => {
+            const orientation = screen.orientation as ScreenOrientation & {
+              lock?: (to: string) => Promise<void>;
+            };
+            return orientation?.lock?.('landscape');
+          })
+          .catch(() => undefined);
+      });
+      document.addEventListener('fullscreenchange', () => {
+        button.hidden = document.fullscreenElement !== null;
+      });
+    }
+  }
+
   private buildSettingRows(): OptionRow[] {
     const qualities = ['Low', 'Medium', 'High', 'Ultra'];
     // Percentages in tens: fine enough to be useful, coarse enough to reach the

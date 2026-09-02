@@ -151,6 +151,29 @@ export class PauseMenu {
   }
 
   /** Moves the selection. Returns the choice when one is committed. */
+  /**
+   * A tap, in overlay pixels with the origin bottom left.
+   *
+   * Unlike the menu's lists, a tap here confirms outright: there are two rows,
+   * both of them say what they do, and a player who has stopped the race wants
+   * out of this panel rather than a browsing gesture.
+   */
+  tap(x: number, y: number): PauseChoice | null {
+    if (!this.open) return null;
+
+    const localX = x - this.panel.position.x;
+    const localY = y - this.panel.position.y;
+    if (localX < -ROW_SLIDE || localX > PANEL_WIDTH) return null;
+
+    const index = Math.round(-localY / ROW_HEIGHT);
+    if (index < 0 || index >= this.rows.length) return null;
+    if (Math.abs(-localY - index * ROW_HEIGHT) > ROW_HEIGHT / 2) return null;
+
+    this.index = index;
+    this.applySelection();
+    return this.rows[index]!.choice;
+  }
+
   handle(action: 'up' | 'down' | 'confirm' | 'back' | string): PauseChoice | null {
     if (!this.open) return null;
     if (action === 'up') {

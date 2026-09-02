@@ -5,6 +5,53 @@ import { createInputSnapshot, resetInputSnapshot } from '@/game/InputSnapshot';
 /** Discrete actions the menu listens for. */
 export type MenuAction = 'up' | 'down' | 'left' | 'right' | 'confirm' | 'back' | 'pause' | 'toggle';
 
+/**
+ * What a pair of thumbs is currently doing.
+ *
+ * A plain mutable struct rather than something passed in each frame: the touch
+ * layer writes into it as the events arrive and this reads it once per update,
+ * which costs no allocation on a path that runs at display rate. The three edge
+ * fields are cleared here after they are folded in, the same way a key press is.
+ */
+export interface TouchState {
+  /** True once a phone is driving. Only marks the active device. */
+  active: boolean;
+  /**
+   * Throttle, 0..1.
+   *
+   * Carried rather than implied by `active`, because it is not always 1: on the
+   * grid the touch layer holds it shut so the standing start is still something
+   * the player times rather than something they are given.
+   */
+  thrust: number;
+  brakeLeft: boolean;
+  brakeRight: boolean;
+  /** Edge: consumed and cleared by `update`. */
+  fire: boolean;
+  absorb: boolean;
+  /** Edge: a fresh press on a pad, for the double-tap that shifts and rolls. */
+  tapLeft: boolean;
+  tapRight: boolean;
+  /** From the phone's tilt, already deadzoned and curved. */
+  steer: number;
+  pitch: number;
+}
+
+export function createTouchState(): TouchState {
+  return {
+    active: false,
+    thrust: 0,
+    brakeLeft: false,
+    brakeRight: false,
+    fire: false,
+    absorb: false,
+    tapLeft: false,
+    tapRight: false,
+    steer: 0,
+    pitch: 0,
+  };
+}
+
 /** Seconds a shoulder tap stays "recent" for a double-tap to register. */
 const DOUBLE_TAP_WINDOW = 0.26;
 /** Stick deflection below this is treated as centred. */
@@ -73,7 +120,10 @@ export class Input {
   readonly snapshot: InputSnapshot = createInputSnapshot();
 
   /** True when the most recent meaningful input came from a gamepad. */
-  activeDevice: 'keyboard' | 'gamepad' = 'keyboard';
+  activeDevice: 'keyboard' | 'gamepad' | 'touch' = 'keyboard';
+
+  /** Written by the touch layer, folded into the snapshot below. */
+  readonly touch: TouchState = createTouchState();
 
   private readonly held = new Set<string>();
   /**
@@ -225,27 +275,35 @@ export class Input {
       this.activeDevice = 'gamepad';
     }
 
-    s.steer = clamp(this.keySteer + padSteer, -1, 1);
-    s.thrust = clamp01(this.keyThrust + padThrust);
-    s.brakeLeft = clamp01((this.anyHeld(KEY_BINDINGS.brakeLeft) ? 1 : 0) + padBrakeLeft);
-    s.brakeRight = clamp01((this.anyHeld(KEY_BINDINGS.brakeRight) ? 1 : 0) + padBrakeRight);
+    const touch = this.touch;
+    if (touch.active) this.activeDevice = 'touch';
+
+    s.steer = clamp(this.keySteer + padSteer + touch.steer, -1, 1);
+    s.thrust = clamp01(this.keyThrust + padThrust + touch.thrust);
+    s.brakeLeft = clamp01(
+      (this.anyHeld(KEY_BINDINGS.brakeLeft) ? 1 : 0) + padBrakeLeft + (touch.brakeLeft ? 1 : 0),
+    );
+    s.brakeRight = clamp01(
+      (this.anyHeld(KEY_BINDINGS.brakeRight) ? 1 : 0) + padBrakeRight + (touch.brakeRight ? 1 : 0),
+    );
     s.pitch = clamp(
       (this.anyHeld(KEY_BINDINGS.pitchUp) ? 1 : 0) -
         (this.anyHeld(KEY_BINDINGS.pitchDown) ? 1 : 0) -
-        Input.axis(pad?.axes[1]),
+        Input.axis(pad?.axes[1]) +
+        touch.pitch,
       -1,
       1,
     );
 
-    s.fire = this.anyPressed(KEY_BINDINGS.fire) || padEdge(PAD.south);
-    s.absorb = this.anyPressed(KEY_BINDINGS.absorb) || padEdge(PAD.east);
+    s.fire = this.anyPressed(KEY_BINDINGS.fire) || padEdge(PAD.south) || touch.fire;
+    s.absorb = this.anyPressed(KEY_BINDINGS.absorb) || padEdge(PAD.east) || touch.absorb;
     s.lookBack = this.anyHeld(KEY_BINDINGS.lookBack) || padPressed(PAD.leftTrigger);
 
     // --- Double tap: sideshift on the ground, barrel roll in the air ---
     this.tapAge.left += dt;
     this.tapAge.right += dt;
-    const tappedLeft = this.pressesThisFrame.has('KeyQ') || padEdge(PAD.leftShoulder);
-    const tappedRight = this.pressesThisFrame.has('KeyE') || padEdge(PAD.rightShoulder);
+    const tappedLeft = this.pressesThisFrame.has('KeyQ') || padEdge(PAD.leftShoulder) || touch.tapLeft;
+    const tappedRight = this.pressesThisFrame.has('KeyE') || padEdge(PAD.rightShoulder) || touch.tapRight;
 
     if (tappedLeft) {
       if (this.tapAge.left < DOUBLE_TAP_WINDOW) {
@@ -270,6 +328,21 @@ export class Input {
 
     for (let i = 0; i < this.padPrev.length; i++) this.padPrev[i] = padPressed(i);
     this.pressesThisFrame.clear();
+    touch.fire = false;
+    touch.absorb = false;
+    touch.tapLeft = false;
+    touch.tapRight = false;
+  }
+
+  /**
+   * Queues one menu action from outside — a tap, rather than a key.
+   *
+   * Deliberately straight into the queue and past the hold-to-repeat machinery,
+   * which is derived from *held* keys and would either fire once or fire
+   * forever for a finger that is briefly on a row.
+   */
+  pushMenuAction(action: MenuAction): void {
+    this.menuQueue.push(action);
   }
 
   /** Queues menu actions, with hold-to-repeat on the four directions. */

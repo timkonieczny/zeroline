@@ -7,6 +7,9 @@ import { WEAPONS } from './weapons/Weapons';
 import { ResultsTable, formatTime } from './Results';
 import { Minimap } from './Minimap';
 import { EffectBars } from './EffectBars';
+import { TouchPads } from './TouchPads';
+import { IS_TOUCH_DEVICE, safeAreaInsets } from '@/core/Platform';
+import type { TouchControlId, TouchRegion } from '@/core/Touch';
 import { PauseMenu, type PauseChoice } from './PauseMenu';
 
 export type { PauseChoice };
@@ -15,6 +18,9 @@ import { clamp, clamp01, lerp } from '@/core/math';
 
 /** Layout margin from the screen edge, in pixels. */
 const MARGIN = 46;
+/** Shared empty list, so a desktop frame allocates nothing asking for regions. */
+const EMPTY_REGIONS: readonly TouchRegion[] = [];
+
 /** Pixels above the bottom margin the timed-effect bars stack from. */
 const EFFECTS_ABOVE = 88;
 /** Width and height of the shield bar, in pixels. */
@@ -122,6 +128,8 @@ export class Hud {
   private readonly minimap: Minimap;
   /** Draining bars for whatever the player is currently under. */
   private readonly effects: EffectBars;
+  /** The thumb controls, on a phone. Null everywhere else. */
+  private readonly touchPads: TouchPads | null;
   /** Fades the racing readouts down while the classification is up. */
   private raceChrome = 1;
   /** Fades the skip hint with the shots it belongs to. */
@@ -265,6 +273,11 @@ export class Hud {
 
     this.root.add(this.plane);
 
+    // On the scene, not on `root` or `plane`. See `TouchPads` for the three
+    // separate ways that would go wrong.
+    this.touchPads = IS_TOUCH_DEVICE ? new TouchPads(pixelRatio) : null;
+    if (this.touchPads) this.scene.add(this.touchPads.group);
+
     // The placard lives outside the racing chrome. Everything in `root` is
     // hidden wholesale once the flag is out, and the finishing position is the
     // one thing that has to survive that.
@@ -390,6 +403,7 @@ export class Hud {
     this.weaponHint.position.set(0, -2, 0);
 
     this.effects.layout(height);
+    this.touchPads?.layout(width, height, safeAreaInsets());
     this.centreMessage.position.set(width / 2, height * 0.56, 0);
     this.skipHint.position.set(width - MARGIN, MARGIN, 0);
 
@@ -530,6 +544,11 @@ export class Hud {
     this.effects.update(player, MARGIN + EFFECTS_ABOVE);
     this.effects.setOpacity(this.raceChrome);
 
+    // The controls come and go with the establishing shots and the
+    // classification, but never with `raceChrome` — a pause button that fades
+    // under the results table is a menu with no way out.
+    this.touchPads?.setOpacity(this.cinematic || tableUp ? 0 : 1);
+
     this.weaponName.setOpacity(this.weaponSlide * this.raceChrome);
     this.weaponHint.setOpacity(this.weaponSlide * 0.85 * this.raceChrome);
 
@@ -608,10 +627,20 @@ export class Hud {
     this.tableHidden = false;
   }
 
+  /** The thumb controls' hit rectangles, in CSS pixels from the top left. */
+  get touchRegions(): readonly TouchRegion[] {
+    return this.touchPads?.regions ?? EMPTY_REGIONS;
+  }
+
+  setTouchPressed(id: TouchControlId, pressed: boolean): void {
+    this.touchPads?.setPressed(id, pressed);
+  }
+
   dispose(): void {
     this.results.dispose();
     this.minimap.dispose();
     this.effects.dispose();
+    this.touchPads?.dispose();
     this.scene.traverse((object) => {
       if (object instanceof TextMesh) object.dispose();
       else if (object instanceof Mesh) {

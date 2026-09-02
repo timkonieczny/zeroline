@@ -4,7 +4,7 @@ import { Track } from '@/track/Track';
 import { meridianCoast } from '@/data/tracks/meridian-coast';
 import { Craft } from '@/game/Craft';
 import { placeOnGrid, respawn, stepCraft } from '@/game/Physics';
-import { createInputSnapshot, type InputSnapshot } from '@/game/InputSnapshot';
+import { consumeInputEdges, createInputSnapshot, type InputSnapshot } from '@/game/InputSnapshot';
 import { teamById } from '@/data/teams';
 import { speedClassById } from '@/game/Handling';
 import { provingGround } from './helpers/testTracks';
@@ -261,5 +261,62 @@ describe('render state across a teleport', () => {
 
     expect(craft.state.position.distanceTo(before)).toBeGreaterThan(0);
     expect(craft.previous.position.distanceTo(craft.state.position)).toBe(0);
+  });
+});
+
+/**
+ * A tap is one tap, whatever the frame rate.
+ *
+ * The loop runs up to six ticks between two renders and the input snapshot is
+ * rebuilt in the render, so every tick of a frame sees the same edge. Applied
+ * once per tick, a sideshift threw the craft four times as far at thirty frames
+ * a second as at a hundred and twenty — a bug that cannot happen on the machine
+ * it was written on, and a determinism fault besides.
+ */
+describe('one-tick edges', () => {
+  /** Sideways speed picked up over `ticks` ticks that all share one snapshot. */
+  function lateralSpeed(ticks: number, consume: boolean): number {
+    const craft = makeCraft(flat);
+    const steady = { ...createInputSnapshot(), thrust: 1 };
+    run(craft, steady, 3, flat);
+
+    const shared: InputSnapshot = { ...steady, sideshift: 1 };
+    for (let i = 0; i < ticks; i++) {
+      craft.beginTick();
+      stepCraft(craft, shared, flat, TICK);
+      // What the loop now does once a tick has consumed the edges.
+      if (consume) consumeInputEdges(shared);
+    }
+
+    const v = craft.state.velocity.clone();
+    return v.addScaledVector(craft.state.forward, -v.dot(craft.state.forward)).length();
+  }
+
+  it('applies the impulse once however many ticks share the frame', () => {
+    // Six ticks is one frame at thirty frames a second. Without the consume,
+    // all six see the same edge and the craft is thrown six times as hard.
+    const once = lateralSpeed(6, true);
+    const sixTimes = lateralSpeed(6, false);
+
+    expect(once).toBeGreaterThan(0);
+    expect(once).toBeLessThan(sixTimes * 0.4);
+  });
+
+  it('stops the frame rate deciding how hard the shift lands', () => {
+    // Consumed, a longer frame can only bleed speed off the one impulse it
+    // was given. Unconsumed, it hands out another impulse every tick — which
+    // is the fault: how far a shift threw you depended on the machine.
+    expect(lateralSpeed(6, true)).toBeLessThanOrEqual(lateralSpeed(2, true));
+    expect(lateralSpeed(6, false)).toBeGreaterThan(lateralSpeed(2, false));
+  });
+
+  it('leaves the continuous axes alone', () => {
+    const input = { ...createInputSnapshot(), thrust: 1, steer: -0.4, brakeLeft: 1, fire: true };
+    consumeInputEdges(input);
+
+    expect(input.fire).toBe(false);
+    expect(input.thrust).toBe(1);
+    expect(input.steer).toBe(-0.4);
+    expect(input.brakeLeft).toBe(1);
   });
 });

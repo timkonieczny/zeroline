@@ -39,6 +39,7 @@ import { GarageProps } from './GarageProps';
 import { buildWordmark3D } from '@/ui/Wordmark3D';
 import { LIGHT_UI } from '@/ui/Palette';
 import { TextMesh, panelMaterial } from '@/ui/Text';
+import { IS_TOUCH_DEVICE } from '@/core/Platform';
 import { ListMenu, StatBar } from '@/ui/Widgets';
 import { OptionList, type OptionRow } from '@/ui/OptionList';
 import { GliderModel } from '@/game/GliderModel';
@@ -60,6 +61,13 @@ export interface MenuSelection {
 }
 
 const MARGIN = 74;
+/**
+ * Pixels of slack around the breadcrumb's own glyphs, on touch.
+ *
+ * The text is 12 pt and a thumb is not. This is what takes a line of type up to
+ * something worth aiming at.
+ */
+const BREADCRUMB_PAD = 18;
 const UI = LIGHT_UI;
 
 /** The garage's walls and haze. */
@@ -466,20 +474,37 @@ export class MenuStage {
       controls: 'Zeroline / Controls',
       settings: 'Zeroline / Settings',
     };
-    this.breadcrumb.setText(trail[screen]);
+    // On touch the breadcrumb is also the way back, so it says so.
+    this.breadcrumb.setText(
+      IS_TOUCH_DEVICE && screen !== 'title' ? `‹  ${trail[screen]}` : trail[screen],
+    );
     this.breadcrumb.visible = screen !== 'title';
 
-    const hints: Record<MenuScreen, string> = {
-      title: '',
-      main: 'Enter select',
-      track: 'Enter select   ·   Esc back',
-      craft: 'Enter select   ·   Esc back',
-      class: 'Enter start   ·   Esc back',
-      controls: 'Esc back',
-      settings: 'Left right adjust   ·   Esc back',
-    };
+    // Touch gets different words because the keyboard ones are lies on a
+    // phone, and the title screen carries the fullscreen affordance — it is the
+    // one line that is otherwise empty, and the one moment before anything has
+    // started.
+    const hints: Record<MenuScreen, string> = IS_TOUCH_DEVICE
+      ? {
+          title: 'Tap to begin',
+          main: 'Tap to choose   ·   tap again to open',
+          track: 'Tap to choose   ·   tap again to open',
+          craft: 'Tap to choose   ·   tap again to open',
+          class: 'Tap to choose   ·   tap again to start',
+          controls: 'Tap anywhere to go back',
+          settings: 'Tap the arrows to adjust',
+        }
+      : {
+          title: 'F11 fullscreen',
+          main: 'Enter select',
+          track: 'Enter select   ·   Esc back',
+          craft: 'Enter select   ·   Esc back',
+          class: 'Enter start   ·   Esc back',
+          controls: 'Esc back',
+          settings: 'Left right adjust   ·   Esc back',
+        };
     this.hint.setText(hints[screen]);
-    this.hint.visible = screen !== 'title';
+    this.hint.visible = hints[screen] !== '';
 
     this.layout();
   }
@@ -487,6 +512,71 @@ export class MenuStage {
   // --- Input ------------------------------------------------------------
 
   /** Handles one queued menu action. Returns true if it was consumed. */
+  /**
+   * A tap, in overlay pixels with the origin bottom left.
+   *
+   * **Tap to select, tap again to confirm.** A single tap that confirmed would
+   * make the sliding highlight decorative — and on this menu the highlight is
+   * doing real work, because selecting a craft is also what puts it on the
+   * plinth and fills in its numbers. Browsing *is* moving the cursor. It also
+   * means a mis-tap on the class screen does not drop the curtain and build a
+   * circuit, which is an expensive thing to undo.
+   *
+   * @returns whether the tap landed on anything.
+   */
+  tap(x: number, y: number): boolean {
+    // The breadcrumb is the way back. It already says where you are and it is
+    // already hidden on the one screen where back does nothing, so it is a real
+    // affordance rather than an arrow floating in a corner.
+    if (this.screen !== 'title' && this.hitsBreadcrumb(x, y)) {
+      this.handle('back');
+      return true;
+    }
+
+    if (this.screen === 'title' || this.screen === 'controls') {
+      this.handle(this.screen === 'title' ? 'confirm' : 'back');
+      return true;
+    }
+
+    if (this.screen === 'settings' && this.settingsList) {
+      const chevron = this.settingsList.hitChevron(x, y);
+      if (chevron !== 0) {
+        this.settingsList.adjust(chevron);
+        return true;
+      }
+      const row = this.settingsList.hitTest(x, y);
+      if (row < 0) return false;
+      this.settingsList.select(row);
+      return true;
+    }
+
+    const list = this.lists.get(this.screen);
+    if (!list) return false;
+
+    const row = list.hitTest(x, y);
+    if (row < 0) return false;
+
+    if (row !== list.index) {
+      list.select(row);
+      this.onListMoved();
+      return true;
+    }
+
+    this.handle('confirm');
+    return true;
+  }
+
+  /** The breadcrumb's box. Left-aligned, so it runs right from its anchor. */
+  private hitsBreadcrumb(x: number, y: number): boolean {
+    const { position, size } = this.breadcrumb;
+    return (
+      this.breadcrumb.visible &&
+      x >= position.x - BREADCRUMB_PAD &&
+      x <= position.x + size.x + BREADCRUMB_PAD &&
+      Math.abs(y - position.y) <= size.y / 2 + BREADCRUMB_PAD
+    );
+  }
+
   handle(action: MenuAction): boolean {
     const list = this.lists.get(this.screen);
 

@@ -46,6 +46,15 @@ const STORAGE_KEY = 'zeroline.settings.v1';
  * should fall back to the default rather than start a race with the volume at
  * `undefined`.
  */
+/** Whether this browser has ever stored a choice, so a default can be seeded once. */
+export function hasStoredSettings(): boolean {
+  try {
+    return window.localStorage.getItem(STORAGE_KEY) !== null;
+  } catch {
+    return false;
+  }
+}
+
 export function loadSettings(): GameSettings {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
