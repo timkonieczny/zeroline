@@ -47,6 +47,8 @@ export class Audio {
   } | null = null;
 
   private padVoices: { osc: OscillatorNode; gain: GainNode; filter: BiquadFilterNode }[] = [];
+  /** True while the pause panel holds the world. */
+  private engineMuted = false;
   private noiseBuffer: AudioBuffer | null = null;
   private mix: AudioMix = { ...DEFAULT_MIX };
   private started = false;
@@ -161,6 +163,27 @@ export class Audio {
       noise.stop();
     }, 400);
     this.engine = null;
+    this.engineMuted = false;
+  }
+
+  /**
+   * Silences the engine without tearing it down.
+   *
+   * The pause panel freezes the simulation but the render loop keeps running,
+   * so the director keeps handing the engine the speed the craft was doing when
+   * it stopped — a paused game droning at 400 km/h. Muting rather than stopping
+   * keeps the oscillators running and their phase intact, so resuming does not
+   * click.
+   */
+  setEngineMuted(muted: boolean): void {
+    if (muted === this.engineMuted) return;
+    this.engineMuted = muted;
+    if (!muted || !this.engine || !this.context) return;
+    // Only the fade down is written here; `updateEngine` brings it back on the
+    // first frame after the panel closes, from wherever the ramp left it.
+    // Quick enough to read as the game stopping, slow enough not to click.
+    this.engine.gain.gain.setTargetAtTime(0, this.context.currentTime, 0.03);
+    this.engine.noiseGain.gain.setTargetAtTime(0, this.context.currentTime, 0.03);
   }
 
   /**
@@ -172,7 +195,9 @@ export class Audio {
    */
   updateEngine(speedFraction: number, thrust: number, boosting: boolean): void {
     const ctx = this.context;
-    if (!ctx || !this.engine) return;
+    // Muted: leave the ramp `setEngineMuted` started alone. Writing a target
+    // every frame would hold the note up against it.
+    if (!ctx || !this.engine || this.engineMuted) return;
     const now = ctx.currentTime;
     const speed = clamp01(speedFraction);
 

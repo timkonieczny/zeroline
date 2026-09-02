@@ -6,6 +6,8 @@ import { Environment } from '@/track/scenery/Environment';
 import { Skyline } from '@/track/scenery/Skyline';
 import { SkyHighway } from '@/track/scenery/SkyHighway';
 import { StartLine } from '@/track/scenery/StartLine';
+import { TrackMarkings } from '@/track/scenery/TrackMarkings';
+import { TunnelGlass } from '@/track/scenery/TunnelGlass';
 import type { TrackDefinition } from '@/track/TrackTypes';
 import { COUNTDOWN, Race, type RaceSetup } from './Race';
 import { GliderModel } from './GliderModel';
@@ -54,6 +56,8 @@ export class RaceStage {
   private readonly skyline: Skyline;
   private readonly highway: SkyHighway;
   private readonly startLine: StartLine;
+  private readonly markings: TrackMarkings;
+  private readonly tunnelGlass: TunnelGlass;
   private readonly ordnance = new WeaponVisuals();
   /** The shots before the lights, or null once they are done. */
   private intro: RaceIntro | null = null;
@@ -87,6 +91,12 @@ export class RaceStage {
 
     this.startLine = new StartLine(this.track);
     this.scene.add(this.startLine.group);
+
+    this.markings = new TrackMarkings(this.track);
+    this.scene.add(this.markings.group);
+
+    this.tunnelGlass = new TunnelGlass(this.track);
+    this.scene.add(this.tunnelGlass.group);
 
     this.scene.add(this.ordnance.group);
 
@@ -248,6 +258,8 @@ export class RaceStage {
     this.skyline.dispose();
     this.highway.dispose();
     this.startLine.dispose();
+    this.markings.dispose();
+    this.tunnelGlass.dispose();
     this.ordnance.dispose();
     this.hud.dispose();
   }

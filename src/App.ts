@@ -429,6 +429,9 @@ export class App {
         this.renderer.camera,
         frameTime,
       );
+      // The world is held but the loop is not, so the engine would otherwise
+      // keep sounding whatever speed the craft stopped at.
+      this.audio.setEngineMuted(this.paused);
       this.director?.update(frameTime);
       this.racePost.setDrive(
         player.telemetry.speedFraction,

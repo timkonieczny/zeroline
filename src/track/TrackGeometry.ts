@@ -14,11 +14,11 @@ import { wrap } from '@/core/math';
  */
 
 /** Half-width of the tunnel bore, in metres. */
-const TUNNEL_RADIUS = 19;
+export const TUNNEL_RADIUS = 19;
 /** Rings around the bore. */
 const TUNNEL_SEGMENTS = 14;
 /** How thick the tunnel's walls are, in metres. */
-const TUNNEL_THICKNESS = 2.4;
+export const TUNNEL_THICKNESS = 2.4;
 
 const _portal = new Vector3();
 

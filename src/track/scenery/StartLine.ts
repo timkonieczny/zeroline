@@ -1,15 +1,21 @@
 import { BoxGeometry, CircleGeometry, Group, Matrix4, Mesh, Vector3, type BufferGeometry } from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { MeshStandardNodeMaterial } from 'three/webgpu';
-import { attribute, color, float, mix, vec3 } from 'three/tsl';
-import { buildRibbon, type ProfilePoint } from '../TrackRibbon';
+import { color, float, vec3 } from 'three/tsl';
+import { buildWordmark3D } from '@/ui/Wordmark3D';
+import { paintMaterial, paintText, stripe } from './RoadPaint';
 import type { Track } from '../Track';
-import { clamp, wrap } from '@/core/math';
+import { clamp } from '@/core/math';
 
 /** Metres of road the gantry stands clear of the barrier on each side. */
 const PYLON_CLEARANCE = 2.2;
 /** Height of the underside of the cross beam, in metres. */
 const BEAM_HEIGHT = 11.4;
+/** Height and depth of the sign board carried above the beam, in metres. */
+const BOARD_HEIGHT = 4.2;
+const BOARD_DEPTH = 0.7;
+/** Metres of air between the beam and the board it carries. */
+const BOARD_GAP = 0.6;
 
 /** Light columns, and lamps stacked in each. Five by two, as in Formula 1. */
 const COLUMNS = 5;
@@ -35,15 +41,10 @@ const BOX_HALF_LENGTH = 3.6;
 const BOX_HALF_WIDTH = 2.3;
 /** Width of a painted stroke, in metres. */
 const STROKE = 0.3;
-/** Height of the paint above the road surface, in metres. */
-const PAINT_LIFT = 0.035;
-const NUMERAL_LIFT = 0.05;
 
-/** Metres ahead of its slot a grid number is painted. */
+/** Metres ahead of its slot a grid number is painted, and how it is cut. */
 const NUMERAL_AHEAD = 5.7;
-const NUMERAL_HEIGHT = 3.4;
-const NUMERAL_WIDTH = 2;
-const NUMERAL_STROKE = 0.4;
+const NUMERAL = { height: 3.4, width: 2, stroke: 0.4 };
 
 /** Half the width of the bar across the road at the line, in metres. */
 const LINE_HALF_LENGTH = 0.9;
@@ -56,23 +57,6 @@ const LINE_HALF_LENGTH = 0.9;
  */
 const GRID_SLOTS = 8;
 
-/**
- * Which of the seven segments each digit lights, as a bit field.
- *
- * Bits run A (top), B (upper right), C (lower right), D (bottom), E (lower
- * left), F (upper left), G (middle) — the order every seven-segment part has
- * used since the 1970s, which is worth keeping even here, where the segments
- * are quads of road paint rather than a display.
- */
-const SEGMENT_A = 1;
-const SEGMENT_B = 2;
-const SEGMENT_C = 4;
-const SEGMENT_D = 8;
-const SEGMENT_E = 16;
-const SEGMENT_F = 32;
-const SEGMENT_G = 64;
-const DIGITS = [63, 6, 91, 79, 102, 109, 125, 7, 127, 111];
-
 const _origin = new Vector3();
 const _right = new Vector3();
 const _up = new Vector3();
@@ -82,15 +66,12 @@ const _basis = new Matrix4();
 /**
  * The start of a race, painted on the road and hung over it.
  *
- * Two things that only make sense together: a gantry across the line carrying
- * the lights, and a box on the road for every slot on the grid with its
- * position painted in front of it. Both are generated from the same grid the
- * physics places craft on, so a circuit with a wider road or a different field
- * size gets a start line that fits it without a number being touched.
- *
- * The paint is swept with the road rather than laid out flat and lifted, which
- * matters at the one circuit feature it is most likely to meet: a start line on
- * a crest. Flat quads there sink into the surface at both ends.
+ * Three things that only make sense together: a gantry across the line carrying
+ * the lights and the circuit's name, a box on the road for every slot on the
+ * grid with its position painted in front of it, and the line itself. All of it
+ * is generated from the same grid the physics places craft on, so a circuit
+ * with a wider road or a different name gets a start line that fits it without
+ * a number being touched.
  */
 export class StartLine {
   readonly group = new Group();
@@ -112,7 +93,7 @@ export class StartLine {
     _tangent.copy(frame.tangent);
     const halfWidth = frame.width * 0.5;
 
-    const paint = new Mesh(StartLine.buildPaint(track), StartLine.paintMaterial());
+    const paint = new Mesh(StartLine.buildPaint(track), paintMaterial());
     paint.name = 'grid-paint';
     paint.receiveShadow = true;
     this.group.add(paint);
@@ -131,9 +112,14 @@ export class StartLine {
     beam.position.y = BEAM_HEIGHT + 0.52;
     gantry.add(beam);
 
+    // Everything above the beam is the sign, so the pylons carry on to the top
+    // of the board rather than stopping at the lights.
+    const boardBase = BEAM_HEIGHT + 1.05 + BOARD_GAP;
+    const pylonHeight = boardBase + BOARD_HEIGHT;
+
     for (const side of [-1, 1]) {
-      const pylon = new Mesh(new BoxGeometry(1.1, BEAM_HEIGHT + 1.04, 1.7), structure);
-      pylon.position.set(side * (halfWidth + PYLON_CLEARANCE), (BEAM_HEIGHT + 1.04) * 0.5, 0);
+      const pylon = new Mesh(new BoxGeometry(1.1, pylonHeight, 1.7), structure);
+      pylon.position.set(side * (halfWidth + PYLON_CLEARANCE), pylonHeight * 0.5, 0);
       gantry.add(pylon);
 
       // A brace back to the pylon's foot, so the beam does not read as balanced
@@ -143,6 +129,8 @@ export class StartLine {
       brace.rotation.z = side * 0.42;
       gantry.add(brace);
     }
+
+    StartLine.buildSign(track, gantry, span, boardBase, housing);
 
     // The blade the lamps are set into, hung under the beam.
     const bladeWidth = COLUMNS * COLUMN_SPACING + 1.1;
@@ -224,25 +212,69 @@ export class StartLine {
     });
   }
 
+  // --- The sign ------------------------------------------------------------
+
+  /**
+   * The board above the beam, and the circuit's name standing off it.
+   *
+   * The same extruded bar alphabet as the wordmark on the hangar wall, for the
+   * same reason: there is no font file here to extrude, and a sign meant to be
+   * read at three hundred metres wants simple letterforms anyway.
+   *
+   * Mounted on the board's rear face and turned to look back down the road, so
+   * it faces the grid. A welcome nobody arriving can read is a decoration.
+   */
+  private static buildSign(
+    track: Track,
+    gantry: Group,
+    span: number,
+    base: number,
+    housing: MeshStandardNodeMaterial,
+  ): void {
+    const width = span * 0.9;
+    const board = new Mesh(new BoxGeometry(width, BOARD_HEIGHT, BOARD_DEPTH), housing);
+    board.position.set(0, base + BOARD_HEIGHT * 0.5, 0);
+    gantry.add(board);
+
+    const accent = track.districtAt(track.startS).accent;
+    const name = track.definition.name.toUpperCase();
+
+    // Sized so a longer circuit name still clears the board's ends: the
+    // alphabet advances by 0.92 of the cap height per character.
+    const nameHeight = Math.min(1.9, (width * 0.86) / (Math.max(name.length, 1) * 0.92));
+
+    const lines = [
+      { text: 'WELCOME TO', height: nameHeight * 0.46, y: base + BOARD_HEIGHT * 0.66, tint: 0xdbe3ea },
+      { text: name, height: nameHeight, y: base + BOARD_HEIGHT * 0.17, tint: accent },
+    ];
+
+    for (const line of lines) {
+      const letters = buildWordmark3D({
+        text: line.text,
+        height: line.height,
+        depth: 0.26,
+        split: line.text.length,
+        first: line.tint,
+        second: line.tint,
+      });
+      letters.position.set(0, line.y, -(BOARD_DEPTH * 0.5 + 0.13));
+      letters.rotation.y = Math.PI;
+      gantry.add(letters);
+    }
+  }
+
   // --- Paint ---------------------------------------------------------------
 
   /**
    * The bar across the line, a box for every grid slot, and the slot's number
    * painted ahead of it.
-   *
-   * All of it is ribbons swept along the centreline, which is the same
-   * machinery the road, the kerbs and the speed pads are built from — so the
-   * paint banks and crests with the surface it is painted on, and none of it
-   * needs a texture.
    */
   private static buildPaint(track: Track): BufferGeometry {
     const pieces: BufferGeometry[] = [];
 
     // The line itself, edge to edge, with the accent behind it.
-    pieces.push(StartLine.stripe(track, track.startS, LINE_HALF_LENGTH, -Infinity, Infinity, 0));
-    pieces.push(
-      StartLine.stripe(track, track.startS - LINE_HALF_LENGTH - 0.22, 0.14, -Infinity, Infinity, 1),
-    );
+    pieces.push(stripe(track, track.startS, LINE_HALF_LENGTH, -Infinity, Infinity, 0));
+    pieces.push(stripe(track, track.startS - LINE_HALF_LENGTH - 0.22, 0.14, -Infinity, Infinity, 1));
 
     for (let slot = 0; slot < GRID_SLOTS; slot++) {
       const { s, lateral } = track.gridSlot(slot);
@@ -250,13 +282,14 @@ export class StartLine {
       // The box: two rails down the sides, two bars across the ends.
       for (const side of [-1, 1]) {
         const outer = lateral + side * BOX_HALF_WIDTH;
+        const inner = outer - side * STROKE;
         pieces.push(
-          StartLine.stripe(track, s, BOX_HALF_LENGTH, Math.min(outer, outer - side * STROKE), Math.max(outer, outer - side * STROKE), 0),
+          stripe(track, s, BOX_HALF_LENGTH, Math.min(outer, inner), Math.max(outer, inner), 0),
         );
       }
       for (const end of [-1, 1]) {
         pieces.push(
-          StartLine.stripe(
+          stripe(
             track,
             s + end * (BOX_HALF_LENGTH - STROKE * 0.5),
             STROKE * 0.5,
@@ -267,110 +300,13 @@ export class StartLine {
         );
       }
 
-      pieces.push(...StartLine.numeral(track, s + NUMERAL_AHEAD, lateral, slot + 1));
+      pieces.push(...paintText(track, s + NUMERAL_AHEAD, lateral, String(slot + 1), NUMERAL));
     }
 
     return mergeGeometries(pieces, false)!;
   }
 
-  /**
-   * One painted rectangle: `halfLength` metres of road either side of `s`,
-   * between two lateral offsets.
-   *
-   * An infinite offset means the road edge, so the bar across the line stays
-   * edge to edge wherever the road happens to be widest.
-   */
-  private static stripe(
-    track: Track,
-    s: number,
-    halfLength: number,
-    from: number,
-    to: number,
-    accent: number,
-  ): BufferGeometry {
-    const up = accent > 0 ? NUMERAL_LIFT : PAINT_LIFT;
-    const profile: ProfilePoint[] = [
-      from === -Infinity
-        ? { anchor: 'left', offset: 0, up, u: 0, accent }
-        : { anchor: 'centre', offset: from, up, u: 0, accent },
-      to === Infinity
-        ? { anchor: 'right', offset: 0, up, u: 1, accent }
-        : { anchor: 'centre', offset: to, up, u: 1, accent },
-    ];
-
-    return buildRibbon(track, {
-      profile,
-      step: 1.2,
-      colourByDistrict: true,
-      range: {
-        fromS: wrap(s - halfLength, track.length),
-        toS: wrap(s + halfLength, track.length),
-      },
-    });
-  }
-
-  /**
-   * A grid position, drawn as seven segments.
-   *
-   * Reads upright to whoever is sitting in the box behind it, which is also the
-   * chase camera's view: the digit's own up axis is the direction of travel.
-   */
-  private static numeral(track: Track, s: number, lateral: number, value: number): BufferGeometry[] {
-    const mask = DIGITS[value % 10]!;
-    const halfHeight = NUMERAL_HEIGHT * 0.5;
-    const halfWidth = NUMERAL_WIDTH * 0.5;
-    const pieces: BufferGeometry[] = [];
-
-    /** A segment across the digit: a bar of paint at height `at`. */
-    const across = (at: number): BufferGeometry =>
-      StartLine.stripe(track, s + at, NUMERAL_STROKE * 0.5, lateral - halfWidth, lateral + halfWidth, 1);
-
-    /** A segment up one side of the digit, from `fromV` to `toV`. */
-    const along = (side: number, fromV: number, toV: number): BufferGeometry => {
-      const edge = lateral + side * halfWidth;
-      const inner = edge - side * NUMERAL_STROKE;
-      return StartLine.stripe(
-        track,
-        s + (fromV + toV) * 0.5,
-        (toV - fromV) * 0.5,
-        Math.min(edge, inner),
-        Math.max(edge, inner),
-        1,
-      );
-    };
-
-    if (mask & SEGMENT_A) pieces.push(across(halfHeight - NUMERAL_STROKE * 0.5));
-    if (mask & SEGMENT_D) pieces.push(across(-halfHeight + NUMERAL_STROKE * 0.5));
-    if (mask & SEGMENT_G) pieces.push(across(0));
-    if (mask & SEGMENT_F) pieces.push(along(-1, NUMERAL_STROKE * 0.5, halfHeight));
-    if (mask & SEGMENT_B) pieces.push(along(1, NUMERAL_STROKE * 0.5, halfHeight));
-    if (mask & SEGMENT_E) pieces.push(along(-1, -halfHeight, -NUMERAL_STROKE * 0.5));
-    if (mask & SEGMENT_C) pieces.push(along(1, -halfHeight, -NUMERAL_STROKE * 0.5));
-
-    return pieces;
-  }
-
   // --- Materials -----------------------------------------------------------
-
-  /**
-   * White paint, with the accent channel switching a stripe over to the
-   * district's colour and lighting it.
-   *
-   * The numbers glow and the box does not. A grid box is paint; a position is
-   * signage, and on a white circuit under a white sun paint alone would not
-   * survive the bloom.
-   */
-  private static paintMaterial(): MeshStandardNodeMaterial {
-    const material = new MeshStandardNodeMaterial();
-    const accent = attribute<'vec4'>('color', 'vec4');
-
-    material.colorNode = mix(vec3(0.95, 0.96, 0.97), accent.xyz.mul(0.35), accent.w);
-    material.emissiveNode = accent.xyz.mul(accent.w).mul(1.5);
-    material.roughnessNode = mix(float(0.6), float(0.34), accent.w);
-    material.metalnessNode = float(0.02);
-    material.vertexColors = true;
-    return material;
-  }
 
   /** Brushed white metal, the same family as the barriers. */
   private static structureMaterial(): MeshStandardNodeMaterial {
@@ -381,7 +317,7 @@ export class StartLine {
     return material;
   }
 
-  /** The dark blade the lamps are set into. */
+  /** The dark blade the lamps are set into, and the board above the beam. */
   private static housingMaterial(): MeshStandardNodeMaterial {
     const material = new MeshStandardNodeMaterial();
     material.colorNode = vec3(0.07, 0.08, 0.09);

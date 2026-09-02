@@ -36,7 +36,7 @@ import {
 } from 'three/tsl';
 import { createFloorSurface } from './FloorSurface';
 import { GarageProps } from './GarageProps';
-import { buildWordmark3D } from './Wordmark3D';
+import { buildWordmark3D } from '@/ui/Wordmark3D';
 import { LIGHT_UI } from '@/ui/Palette';
 import { TextMesh, panelMaterial } from '@/ui/Text';
 import { ListMenu, StatBar } from '@/ui/Widgets';

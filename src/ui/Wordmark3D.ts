@@ -29,10 +29,11 @@ const RIGHT = GLYPH_WIDTH - HALF;
 /**
  * A squared-off geometric alphabet, drawn as bars.
  *
- * Only the eight letters the wordmark needs. Extruding the real typeface would
- * mean shipping a font file to parse, and this game has no binary assets — so
- * the letterforms are numbers like everything else. They are cut to match Geo:
- * one weight, flat terminals, no optical correction anywhere.
+ * The letters the hangar's wordmark needs, plus the rest of the ones a circuit's
+ * welcome sign asks for. Extruding the real typeface would mean shipping a font
+ * file to parse, and this game has no binary assets — so the letterforms are
+ * numbers like everything else. They are cut to match Geo: one weight, flat
+ * terminals, no optical correction anywhere.
  */
 const GLYPHS: Record<string, Bar[]> = {
   Z: [
@@ -69,6 +70,51 @@ const GLYPHS: Record<string, Bar[]> = {
     { x: HALF, y: 0.5, w: STROKE, h: 1 },
     { x: RIGHT, y: 0.5, w: STROKE, h: 1 },
     { x: GLYPH_WIDTH / 2, y: 0.5, w: Math.hypot(GLYPH_WIDTH, 1) - STROKE, h: STROKE, angle: -Math.atan2(1, GLYPH_WIDTH) },
+  ],
+  A: [
+    { x: HALF, y: 0.5, w: STROKE, h: 1 },
+    { x: RIGHT, y: 0.5, w: STROKE, h: 1 },
+    { x: GLYPH_WIDTH / 2, y: 1 - HALF, w: GLYPH_WIDTH, h: STROKE },
+    { x: GLYPH_WIDTH / 2, y: 0.46, w: GLYPH_WIDTH, h: STROKE },
+  ],
+  C: [
+    { x: HALF, y: 0.5, w: STROKE, h: 1 },
+    { x: GLYPH_WIDTH / 2, y: 1 - HALF, w: GLYPH_WIDTH, h: STROKE },
+    { x: GLYPH_WIDTH / 2, y: HALF, w: GLYPH_WIDTH, h: STROKE },
+  ],
+  // Squared everywhere else, but a D drawn square is an O. The two corners are
+  // cut instead, which is the one place this alphabet admits a diagonal that is
+  // not structural.
+  D: [
+    { x: HALF, y: 0.5, w: STROKE, h: 1 },
+    { x: (GLYPH_WIDTH - 0.18) / 2, y: 1 - HALF, w: GLYPH_WIDTH - 0.18, h: STROKE },
+    { x: (GLYPH_WIDTH - 0.18) / 2, y: HALF, w: GLYPH_WIDTH - 0.18, h: STROKE },
+    { x: RIGHT, y: 0.5, w: STROKE, h: 1 - 0.36 },
+    { x: GLYPH_WIDTH - 0.15, y: 1 - 0.11, w: 0.28, h: STROKE, angle: -0.72 },
+    { x: GLYPH_WIDTH - 0.15, y: 0.11, w: 0.28, h: STROKE, angle: 0.72 },
+  ],
+  M: [
+    { x: HALF, y: 0.5, w: STROKE, h: 1 },
+    { x: RIGHT, y: 0.5, w: STROKE, h: 1 },
+    { x: 0.1875, y: 0.725, w: 0.602, h: STROKE, angle: -1.151 },
+    { x: GLYPH_WIDTH - 0.1875, y: 0.725, w: 0.602, h: STROKE, angle: 1.151 },
+  ],
+  S: [
+    { x: GLYPH_WIDTH / 2, y: 1 - HALF, w: GLYPH_WIDTH, h: STROKE },
+    { x: HALF, y: 0.75, w: STROKE, h: 0.5 },
+    { x: GLYPH_WIDTH / 2, y: 0.5, w: GLYPH_WIDTH, h: STROKE },
+    { x: RIGHT, y: 0.25, w: STROKE, h: 0.5 },
+    { x: GLYPH_WIDTH / 2, y: HALF, w: GLYPH_WIDTH, h: STROKE },
+  ],
+  T: [
+    { x: GLYPH_WIDTH / 2, y: 1 - HALF, w: GLYPH_WIDTH, h: STROKE },
+    { x: GLYPH_WIDTH / 2, y: 0.5, w: STROKE, h: 1 },
+  ],
+  W: [
+    { x: HALF, y: 0.5, w: STROKE, h: 1 },
+    { x: RIGHT, y: 0.5, w: STROKE, h: 1 },
+    { x: 0.1875, y: 0.275, w: 0.602, h: STROKE, angle: 1.151 },
+    { x: GLYPH_WIDTH - 0.1875, y: 0.275, w: 0.602, h: STROKE, angle: -1.151 },
   ],
 };
 
