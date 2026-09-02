@@ -125,6 +125,7 @@ export class App {
   private paused = false;
   /** The phone's thumbs and tilt, or null on a desktop. */
   private touch: Touch | null = null;
+  private fullscreenButton: HTMLButtonElement | null = null;
   private readonly motionGate = document.getElementById('motion');
   private readonly curtain = document.getElementById('curtain');
   private readonly curtainStatus = document.getElementById('curtain-status');
@@ -149,10 +150,12 @@ export class App {
     // frame on a weak laptop iGPU at its lowest rung; a handheld is not going
     // to do better, and a player whose first impression is six frames a second
     // never gets as far as the settings screen.
-    if (IS_TOUCH_DEVICE && !hasStoredSettings()) {
-      this.settings.quality = 'low';
-      this.settings.adaptiveResolution = true;
-    }
+    // Quality only. Adaptive resolution is deliberately left off: every step it
+    // takes calls `setSize`, which reallocates the backbuffer and with it every
+    // render target in the post chain, and its 0.06-down / 0.03-up steps hunt
+    // rather than settle. On a phone that is a reallocation every second or so,
+    // and the frames caught mid-swap are the flicker.
+    if (IS_TOUCH_DEVICE && !hasStoredSettings()) this.settings.quality = 'low';
     this.audio.setMix(this.settings.mix);
 
     this.perf = document.createElement('div');
@@ -693,6 +696,8 @@ export class App {
 
     // No motion, no steering. The card is up and nothing is driving until it
     // is granted — which is the choice that was made over a touch fallback.
+    this.showFullscreenButton();
+
     const blocked = touch.motion === 'denied' || touch.motion === 'unavailable';
     this.gate(this.motionGate, blocked);
     if (blocked) touch.mode = 'held';
@@ -766,10 +771,16 @@ export class App {
           })
           .catch(() => undefined);
       });
-      document.addEventListener('fullscreenchange', () => {
-        button.hidden = document.fullscreenElement !== null;
-      });
+      document.addEventListener('fullscreenchange', () => this.showFullscreenButton());
     }
+    this.fullscreenButton = button;
+  }
+
+  /** The control belongs to the hangar. A race has its own corners spoken for. */
+  private showFullscreenButton(): void {
+    const button = this.fullscreenButton;
+    if (!button) return;
+    button.hidden = document.fullscreenElement !== null || this.mode !== 'menu';
   }
 
   private buildSettingRows(): OptionRow[] {

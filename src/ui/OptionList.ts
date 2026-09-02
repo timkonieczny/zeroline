@@ -1,4 +1,4 @@
-import { Group, Mesh, PlaneGeometry } from 'three';
+import { Group, Mesh, PlaneGeometry, Vector3 } from 'three';
 import { TextMesh, panelMaterial } from './Text';
 import { clamp, lerp } from '@/core/math';
 import { DARK_UI, type UiPalette } from './Palette';
@@ -15,6 +15,9 @@ const CHEVRON_LEFT_INSET = 200;
 const CHEVRON_RIGHT_INSET = 24;
 /** Side of a chevron's tap target, in pixels. The mark itself is far smaller. */
 const CHEVRON_TARGET = 56;
+
+/** Scratch for the world-position lookups. Nothing allocates on a tap. */
+const _origin = new Vector3();
 
 export interface OptionRow {
   /** Setting name, shown on the left. */
@@ -133,7 +136,10 @@ export class OptionList extends Group {
 
   /** Row under a point in overlay pixels, or -1. */
   hitTest(x: number, y: number): number {
-    return rowAt(x - this.position.x, y - this.position.y, this.width, this.rowHeight, this.rows.length);
+    // This list lives inside the settings panel, which is translated — so its
+    // own `position` is (0, 0) and says nothing about where it is on screen.
+    this.getWorldPosition(_origin);
+    return rowAt(x - _origin.x, y - _origin.y, this.width, this.rowHeight, this.rows.length);
   }
 
   /**
@@ -144,7 +150,8 @@ export class OptionList extends Group {
     const index = this.hitTest(x, y);
     if (index < 0) return 0;
 
-    const localX = x - this.position.x;
+    this.getWorldPosition(_origin);
+    const localX = x - _origin.x;
     if (Math.abs(localX - (this.width - CHEVRON_LEFT_INSET)) <= CHEVRON_TARGET / 2) return -1;
     if (Math.abs(localX - (this.width - CHEVRON_RIGHT_INSET)) <= CHEVRON_TARGET / 2) return 1;
     return 0;

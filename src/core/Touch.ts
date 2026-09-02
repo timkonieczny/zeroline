@@ -295,8 +295,11 @@ export class Touch {
       this.options.onFirstGesture();
     }
 
-    if (this.mode === 'held') return;
-
+    // Not gated on the mode. `held` means no *driving* control is live, and it
+    // is set whenever the race is not running — which is exactly when the pause
+    // panel, the classification and the intro are on screen and waiting to be
+    // tapped. Bailing here made all three unreachable on a phone. The app's own
+    // handler drops taps behind the curtain, which is the case that matters.
     const control = this.mode === 'race' ? this.controlAt(event.clientX, event.clientY) : null;
     if (!control) {
       this.options.onTap(event.clientX, event.clientY);

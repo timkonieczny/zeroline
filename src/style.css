@@ -261,7 +261,6 @@ canvas#view {
   letter-spacing: 0.24em;
   text-indent: 0.24em;
   z-index: 12;
-  backdrop-filter: blur(6px);
 }
 
 #fullscreen[hidden] {

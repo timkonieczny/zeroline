@@ -1,9 +1,12 @@
-import { Group, Mesh, PlaneGeometry } from 'three';
+import { Group, Mesh, PlaneGeometry, Vector3 } from 'three';
 import { MeshBasicNodeMaterial } from 'three/webgpu';
 import { color, uniform } from 'three/tsl';
 import { TextMesh, panelMaterial } from './Text';
 import { clamp, lerp } from '@/core/math';
 import { DARK_UI, type UiPalette } from './Palette';
+
+/** Scratch for the world-position lookups below. Nothing allocates on a tap. */
+const _origin = new Vector3();
 
 /** Pixels the selected row slides to the right. */
 const ROW_SLIDE = 14;
@@ -131,7 +134,12 @@ export class ListMenu extends Group {
 
   /** Row under a point in overlay pixels, or -1. Locked rows never answer. */
   hitTest(x: number, y: number): number {
-    const index = rowAt(x - this.position.x, y - this.position.y, this.width, this.rowHeight, this.rows.length);
+    // Where the list actually is, not where it was told to sit. Some of these
+    // hang off a panel that is itself translated, and `position` is only the
+    // offset from that panel — which put every settings tap a screen-height
+    // away from the row it was aimed at.
+    this.getWorldPosition(_origin);
+    const index = rowAt(x - _origin.x, y - _origin.y, this.width, this.rowHeight, this.rows.length);
     if (index < 0) return -1;
     return this.rows[index]!.locked ? -1 : index;
   }
