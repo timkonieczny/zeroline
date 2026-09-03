@@ -1,6 +1,15 @@
-import { BoxGeometry, Color, Group, InstancedMesh, Matrix4, Object3D, Vector3 } from 'three';
+import {
+  BoxGeometry,
+  Color,
+  Group,
+  InstancedBufferAttribute,
+  InstancedMesh,
+  Object3D,
+  Vector3,
+} from 'three';
 import { MeshStandardNodeMaterial } from 'three/webgpu';
 import {
+  attribute,
   color,
   float,
   floor,
@@ -11,6 +20,7 @@ import {
   smoothstep,
   step,
   uv,
+  vec2,
   vec3,
 } from 'three/tsl';
 import type { Track } from '../Track';
@@ -26,9 +36,51 @@ const STRIDE = 26;
 const CAPACITY = 900;
 /** Instances reserved for platforms and bridges. */
 const DECK_CAPACITY = 220;
-/** Windows across and up a facade. Scaled by the box's UV, so it is per-face. */
+/** Windows across a facade. Scaled by the box's UV, so it is per-face. */
 const WINDOWS_ACROSS = 7;
-const WINDOWS_UP = 16;
+/**
+ * Metres per storey.
+ *
+ * The window grid used to be a fixed sixteen rows whatever the building, which
+ * meant a four-hundred-metre tower and a thirty-metre block were drawn with the
+ * same number of floors — twenty-five metre windows on one and two-metre
+ * windows on the other. Rows are counted from the height now, so a taller
+ * building is a building with more storeys in it rather than one with taller
+ * windows, and raising one for the shadow it casts does not distort it.
+ */
+const STOREY_HEIGHT = 4.2;
+/** Fewest and most storeys drawn, so the arithmetic cannot produce a stripe. */
+const MIN_STOREYS = 3;
+const MAX_STOREYS = 130;
+
+/** Metres between samples when measuring how much of the lap sits in shadow. */
+const SHADOW_SAMPLE_STEP = 9;
+/**
+ * How much of the lap the search will keep raising buildings to shade.
+ *
+ * It is a ceiling on the effort, not a promise. A quarter of the lap has no
+ * building anywhere between it and the sun and another quarter has one that
+ * cannot grow past the traffic lane over it, so the search runs out of
+ * candidates at about 47% rather than stopping here.
+ * `scripts/shadow-report.ts` prints where it actually lands.
+ */
+const SHADOW_TARGET = 0.6;
+/**
+ * Most a building may gain over what its district gave it, in metres.
+ *
+ * The knee in the curve. This shades 47% of the lap; lifting it to 450 buys
+ * under a point, and past that the number does not move at all — what is left
+ * is road with nothing between it and the sun, or with a traffic lane capping
+ * whatever is. Raising it further only makes the city taller.
+ */
+const SHADOW_MAX_GAIN = 320;
+/**
+ * How much of a building's width has to be in line before it counts as shading.
+ *
+ * Under one, because the edge of a shadow is soft and a road only clipping the
+ * corner of one does not read as being in it.
+ */
+const SHADOW_BITE = 0.8;
 /** A window is lit when its hash lands above this. */
 const LIT_FRACTION = 0.72;
 /** Fraction of the skyline clad in glass rather than concrete. */
@@ -77,11 +129,20 @@ const THEMES: Record<SceneryTheme, ThemeRule> = {
 };
 
 const _dummy = new Object3D();
-const _matrix = new Matrix4();
 const _position = new Vector3();
 
 /** One placed building, kept so platforms and bridges can be fitted afterwards. */
+/** A circle on the water that a building has to stay out of. */
+export interface Footprint {
+  position: Vector3;
+  radius: number;
+}
+
 interface Block {
+  /** Footprint and turn, so a raised building's matrix can be rebuilt. */
+  width: number;
+  depth: number;
+  rotation: number;
   /** Which instance in the skyline mesh this is. */
   index: number;
   position: Vector3;
@@ -124,10 +185,20 @@ export class Skyline {
   readonly group = new Group();
   private readonly mesh: InstancedMesh;
   private readonly decks: InstancedMesh;
+  private readonly storeys: InstancedBufferAttribute;
 
-  constructor(track: Track) {
+  /**
+   * @param keepOut Footprints nothing may be built over — the grandstands.
+   *   They are placed first because there are five of them and nine hundred
+   *   candidate buildings; making the plentiful thing give way is cheaper than
+   *   hunting for a straight with a gap in the city beside it.
+   */
+  constructor(track: Track, keepOut: readonly Footprint[] = []) {
     const rng = new Rng(0xb0d1e5);
     const geometry = new BoxGeometry(1, 1, 1);
+    // One value per building: how many rows of windows its facade carries.
+    this.storeys = new InstancedBufferAttribute(new Float32Array(CAPACITY), 1);
+    geometry.setAttribute('storeys', this.storeys);
     // Origin at the base, so scaling a building grows it upward.
     geometry.translate(0, 0.5, 0);
 
@@ -170,11 +241,6 @@ export class Skyline {
           for (const block of pending) {
             block.baseY = SEA_LEVEL;
             block.position.setY(SEA_LEVEL);
-            this.mesh.getMatrixAt(block.index, _matrix);
-            _matrix.decompose(_dummy.position, _dummy.quaternion, _dummy.scale);
-            _dummy.position.setY(SEA_LEVEL);
-            _dummy.updateMatrix();
-            this.mesh.setMatrixAt(block.index, _dummy.matrix);
           }
         }
       }
@@ -215,6 +281,7 @@ export class Skyline {
         // shove a tower into the sea a hundred metres out.
         const top = SEA_LEVEL + height;
         if (!Skyline.pushClear(_position, radius, top, road, frame.right, side)) continue;
+        if (Skyline.fouls(_position, radius, keepOut)) continue;
 
         const onPlatform = pending.length > 0 || rng.next() < PLATFORM_CHANCE;
         if (pending.length === 0 && onPlatform) pendingDeck = SEA_LEVEL + rng.range(5, 13);
@@ -229,18 +296,23 @@ export class Skyline {
         // way rather than spear a commuter craft.
         const rise = Math.max(10, Math.min(raw, Skyline.laneCeiling(_position.x, _position.z, radius, lanes) - baseY));
 
-        _dummy.position.set(_position.x, baseY, _position.z);
-        _dummy.rotation.set(0, Math.atan2(frame.tangent.x, frame.tangent.z) + rng.range(-0.14, 0.14), 0);
-        _dummy.scale.set(width, rise, depth);
-        _dummy.updateMatrix();
-        this.mesh.setMatrixAt(count, _dummy.matrix);
+        const rotation = Math.atan2(frame.tangent.x, frame.tangent.z) + rng.range(-0.14, 0.14);
 
         const grey = rng.range(0.72, 0.95);
         colour.setRGB(grey, grey * 1.005, grey * 1.02);
         this.mesh.setColorAt(count, colour);
         count++;
 
-        const block: Block = { index: count - 1, position: _dummy.position.clone(), radius, height: rise, baseY };
+        const block: Block = {
+          index: count - 1,
+          position: new Vector3(_position.x, baseY, _position.z),
+          radius,
+          height: rise,
+          baseY,
+          width,
+          depth,
+          rotation,
+        };
         blocks.push(block);
         if (onPlatform) {
           pending.push(block);
@@ -252,7 +324,26 @@ export class Skyline {
     }
     flushPlatform();
 
+    Skyline.raiseForShadows(blocks, track, lanes);
+
+    // Bridges span between the tops, so they are laid after the raise. Doing it
+    // the other way round leaves a walkway a hundred metres down a facade.
     deckCount = Skyline.writeBridges(this.decks, deckCount, blocks, road, rng);
+
+    for (const block of blocks) {
+      _dummy.position.copy(block.position).setY(block.baseY);
+      _dummy.rotation.set(0, block.rotation, 0);
+      _dummy.scale.set(block.width, block.height, block.depth);
+      _dummy.updateMatrix();
+      this.mesh.setMatrixAt(block.index, _dummy.matrix);
+      // Rows of windows, so a raised building gains storeys rather than
+      // stretching the ones it had.
+      this.storeys.setX(
+        block.index,
+        Math.max(MIN_STOREYS, Math.min(MAX_STOREYS, Math.round(block.height / STOREY_HEIGHT))),
+      );
+    }
+    this.storeys.needsUpdate = true;
 
     this.mesh.count = count;
     this.mesh.instanceMatrix.needsUpdate = true;
@@ -269,6 +360,126 @@ export class Skyline {
     (this.mesh.material as { dispose(): void }).dispose();
     this.decks.geometry.dispose();
     (this.decks.material as { dispose(): void }).dispose();
+  }
+
+  /**
+   * Grows existing buildings until the city shades most of the lap.
+   *
+   * The stretch before the tunnel is the best-looking part of the circuit, and
+   * what makes it is the bars of shadow the towers throw across the road. That
+   * happened by accident — the district drew tall buildings and the sun was on
+   * the right side of them. This puts it everywhere on purpose.
+   *
+   * It only ever raises what is already standing, and only in whole storeys: no
+   * new footprint appears, nothing is scaled, and a building that gains sixty
+   * metres gains fourteen floors of windows rather than fourteen tall ones.
+   * Growth is capped by the traffic lanes overhead and by `SHADOW_MAX_GAIN`, so
+   * the skyline keeps its silhouette instead of turning into a wall.
+   *
+   * Cheapest-first: for each unshaded point, the building raised is whichever
+   * one already stands in line with the sun and needs the fewest extra floors.
+   */
+  private static raiseForShadows(
+    blocks: readonly Block[],
+    track: Track,
+    lanes: readonly SkyLane[],
+  ): void {
+    const { azimuth, elevation } = track.definition.sun;
+    const radians = (azimuth * Math.PI) / 180;
+    // The way a shadow runs along the ground: directly away from the sun.
+    const shadeX = -Math.cos(radians);
+    const shadeZ = -Math.sin(radians);
+    // Ground metres a shadow covers per metre of height. 0.97 at 46 degrees.
+    const reach = 1 / Math.tan((elevation * Math.PI) / 180);
+
+    // Only the open road counts. A tunnel is shaded by its own roof, and no
+    // amount of building will change that either way.
+    const road: Vector3[] = [];
+    for (let s = 0; s < track.length; s += SHADOW_SAMPLE_STEP) {
+      if (track.isInTunnel(s)) continue;
+      road.push(track.frameAt(s).position.clone());
+    }
+    if (road.length === 0) return;
+
+    const shaded = new Uint8Array(road.length);
+    let covered = 0;
+
+    /** How far a block's shadow has to travel to reach a point, or -1. */
+    const distanceTo = (block: Block, point: Vector3): number => {
+      const dx = point.x - block.position.x;
+      const dz = point.z - block.position.z;
+      const along = dx * shadeX + dz * shadeZ;
+      if (along <= 0) return -1;
+      // Under the full width, because a shadow's edge is soft and a road
+      // clipping the corner of one does not read as being in it.
+      const across = Math.abs(dx * shadeZ - dz * shadeX);
+      return across > block.radius * SHADOW_BITE ? -1 : along;
+    };
+
+    const markShade = (block: Block): void => {
+      for (let i = 0; i < road.length; i++) {
+        if (shaded[i]) continue;
+        const point = road[i]!;
+        const along = distanceTo(block, point);
+        if (along < 0 || along > (block.baseY + block.height - point.y) * reach) continue;
+        shaded[i] = 1;
+        covered++;
+      }
+    };
+
+    for (const block of blocks) markShade(block);
+
+
+    const target = Math.ceil(road.length * SHADOW_TARGET);
+    for (let i = 0; i < road.length && covered < target; i++) {
+      if (shaded[i]) continue;
+      const point = road[i]!;
+
+      let best: Block | undefined;
+      let bestHeight = 0;
+      let bestGain = Infinity;
+      for (const block of blocks) {
+        const along = distanceTo(block, point);
+        if (along < 0) continue;
+
+        const needed = point.y + along / reach - block.baseY;
+        // Cheapest by floors *added*, not by height reached: a tower already
+        // most of the way there is a better answer than a low block that would
+        // have to double. It is also what keeps the skyline's silhouette —
+        // always growing the shortest candidate flattens the city into a slab.
+        const gain = needed - block.height;
+        if (gain <= 0 || gain >= bestGain) continue;
+        if (gain > SHADOW_MAX_GAIN) continue;
+        if (needed > MAX_STOREYS * STOREY_HEIGHT) continue;
+        const ceiling = Skyline.laneCeiling(block.position.x, block.position.z, block.radius, lanes);
+        if (block.baseY + needed > ceiling) continue;
+
+        bestGain = gain;
+        bestHeight = needed;
+        best = block;
+      }
+      if (!best) continue;
+
+      // Land on a whole storey. Rounding up is what actually reaches the road,
+      // so the ceiling is re-checked rather than assumed to have room for it.
+      const storeys = Math.ceil(bestHeight / STOREY_HEIGHT);
+      const ceiling = Skyline.laneCeiling(best.position.x, best.position.z, best.radius, lanes);
+      if (best.baseY + storeys * STOREY_HEIGHT > ceiling) continue;
+
+      best.height = storeys * STOREY_HEIGHT;
+
+      markShade(best);
+    }
+  }
+
+  /** True when this footprint overlaps anything already standing there. */
+  private static fouls(position: Vector3, radius: number, keepOut: readonly Footprint[]): boolean {
+    for (const other of keepOut) {
+      const dx = position.x - other.position.x;
+      const dz = position.z - other.position.z;
+      if (dx * dx + dz * dz < (radius + other.radius) ** 2) return true;
+    }
+    return false;
   }
 
   /**
@@ -479,7 +690,11 @@ export class Skyline {
     const buildingHash = fract(sin(seed.mul(91.7)).mul(24634.6543));
     const glass = step(float(1 - GLASS_FRACTION), buildingHash);
 
-    const grid = uv().mul(vec3(WINDOWS_ACROSS, WINDOWS_UP, 1).xy);
+    // Rows from the building's own height, columns fixed: a facade is as many
+    // storeys tall as it is, and about as many windows wide whatever its width.
+    // Rows from the building's own height, columns fixed: a facade is as many
+    // storeys tall as it is, and about as many windows wide whatever its width.
+    const grid = uv().mul(vec2(float(WINDOWS_ACROSS), attribute<'float'>('storeys', 'float')));
     const cell = floor(grid);
     const within = fract(grid);
 

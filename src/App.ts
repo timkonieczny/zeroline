@@ -419,7 +419,9 @@ export class App {
 
     if (this.director) this.director.attach(this.race.race);
     else this.director = new AudioDirector(this.audio, this.race.race);
+    this.director.setStands(this.race.grandstands.sites);
     this.audio.startEngine();
+    this.audio.startCrowd();
   }
 
   /**
@@ -503,6 +505,7 @@ export class App {
       this.paused = false;
       this.input.clearMenuActions();
       this.audio.stopEngine();
+      this.audio.stopCrowd();
     });
   }
 

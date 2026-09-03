@@ -17,6 +17,7 @@ npx vite-node scripts/inspect-track.ts   # circuit geometry report: corners, cur
 npx vite-node scripts/hotlap.ts          # headless lap times for every team
 npx vite-node scripts/hotlap.ts kestrel rapier
 npx vite-node scripts/load-profile.ts    # where the load time goes, and what could leave the main thread
+npx vite-node scripts/shadow-report.ts   # how much of the lap the city shades, and where the gaps are
 ```
 
 The two scripts are the tuning loop. Change a number in `Handling.ts` or a corner in a track
@@ -94,12 +95,30 @@ tests/       Vitest suites for the simulation
 - **`core/Renderer.ts`** — renders at the display's real pixel density (`devicePixelRatio`), with
   a `matchMedia` listener for the window moving between monitors. Dynamic resolution is a
   separate multiplier on top of native, never a replacement for it.
-- **`core/Audio.ts`** — every sound synthesised at runtime. No files, same as the visuals.
+- **`core/Audio.ts`** — every sound synthesised at runtime. No files, same as the visuals. The
+  crowd is a noise bed through a formant, panned with a `StereoPannerNode` rather than through
+  Three's `PositionalAudio`: all that machinery exists to derive a gain and a pan from two
+  transforms, and `AudioDirector.placeCrowd` already has both from the craft's arc length.
   `game/AudioDirector.ts` watches race state for edges and turns them into sound, so the
   simulation stays free of side effects and a replay cannot double-trigger anything.
 - **`game/Replay.ts`** — pose and speed for every craft at 30 Hz, played back on a loop once the
   flag is out. Playback writes into the craft's own state, so the camera, the models and the
   engine note cannot tell the difference between being driven and being replayed.
+- **`track/scenery/Skyline.ts`** — the city, and the shadows it throws across the road. After
+  placement it raises existing buildings until the sun bars as much of the lap as it can reach:
+  cheapest-first by floors *added*, capped by the traffic lanes overhead. It only ever adds
+  storeys — the window grid is driven by a per-instance `storeys` attribute, so a building that
+  gains sixty metres gains fourteen floors rather than fourteen tall ones. It lands near 47%,
+  not the 60% it asks for: a quarter of the lap has nothing between it and the sun and another
+  quarter is capped by the traffic lane overhead. Lifting `SHADOW_MAX_GAIN` past 320 m buys
+  under a point and then nothing at all — check with the report before assuming otherwise.
+- **`track/scenery/Grandstands.ts`** — stands on the straights and at the grid, and about 2600
+  spectators in one instanced draw. The crowd is a tapered cylinder with a sphere on it; the
+  Daft Punk read is entirely the helmet, which is metal above a local-Y line with a dark band
+  smoothstepped across it. Cheering is `sin(time·rate + phase)` in the vertex shader off a
+  per-instance attribute, so the CPU never touches a figure after load and a full house costs
+  what an empty one does. Placed *before* the skyline, which is handed their footprints as a
+  keep-out.
 - **`game/RaceStage.ts`** — `settleField()` runs the rest of the field to the flag in one go when
   the player crosses. Without it the classification freezes on projected intervals that do not
   even sort in the same order as the positions beside them.

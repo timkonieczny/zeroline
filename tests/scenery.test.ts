@@ -3,7 +3,11 @@ import { InstancedMesh, Matrix4, Quaternion, Vector3 } from 'three';
 import { Track } from '@/track/Track';
 import { meridianCoast } from '@/data/tracks/meridian-coast';
 import { Skyline } from '@/track/scenery/Skyline';
+import { Grandstands, type StandSite } from '@/track/scenery/Grandstands';
+import { TrackPillars } from '@/track/scenery/TrackPillars';
+import { SEA_LEVEL } from '@/track/scenery/Environment';
 import { LANE_CLEARANCE, LANE_HALF_WIDTH, skyHighwayLanes } from '@/track/scenery/SkyHighway';
+import { placeCrowd } from '@/game/AudioDirector';
 
 /**
  * The skyline is placed by a heuristic that pushes buildings out of the way of
@@ -49,9 +53,18 @@ function skylineMesh(skyline: Skyline): InstancedMesh {
   return mesh;
 }
 
+const track = new Track(meridianCoast);
+const stands = new Grandstands(track);
+// Built the way the stage builds it: the stands first, the city around them.
+const skyline = new Skyline(track, stands.footprints);
+
+function namedMesh(group: { children: { name: string }[] }, name: string): InstancedMesh {
+  const mesh = group.children.find((child) => child.name === name);
+  if (!(mesh instanceof InstancedMesh)) throw new Error(`no ${name} mesh`);
+  return mesh;
+}
+
 describe('skyline placement', () => {
-  const track = new Track(meridianCoast);
-  const skyline = new Skyline(track);
   const buildings = readBoxes(skylineMesh(skyline));
 
   it('places a city', () => {
@@ -85,7 +98,21 @@ describe('skyline placement', () => {
     expect(offenders).toEqual([]);
   });
 
+  it('builds around the grandstands rather than through them', () => {
+    for (const building of buildings) {
+      for (const stand of stands.footprints) {
+        const gap = Math.hypot(
+          building.centre.x - stand.position.x,
+          building.centre.z - stand.position.z,
+        );
+        expect(gap).toBeGreaterThanOrEqual(building.radius + stand.radius);
+      }
+    }
+  });
+
   it('ducks under the sky highway rather than through it', () => {
+    // Also the check on the shadow pass, which raises buildings and then rounds
+    // up to a whole storey. The rounding is where the clearance gets lost.
     const lanes = skyHighwayLanes(track);
     const offenders: string[] = [];
 
@@ -153,5 +180,139 @@ describe('skyline placement', () => {
     }
 
     expect(offenders).toEqual([]);
+  });
+});
+
+/**
+ * The stands, the columns holding them up, and the crowd in them.
+ *
+ * Same argument as the skyline above: a grandstand fanning away from a corner,
+ * a pillar through a traffic lane and a spectator seated in the middle of the
+ * road all look plausible from the cockpit and are only visible from an angle
+ * nobody drives at.
+ */
+describe('grandstands', () => {
+  it('puts one at the grid', () => {
+    const nearest = stands.sites.reduce((best, site) =>
+      Math.abs(site.s - track.startS) < Math.abs(best.s - track.startS) ? site : best,
+    );
+    expect(Math.abs(nearest.s - track.startS)).toBeLessThan(1);
+  });
+
+  it('keeps them off each other', () => {
+    for (const a of stands.sites) {
+      for (const b of stands.sites) {
+        if (a === b) continue;
+        expect(a.position.distanceTo(b.position)).toBeGreaterThan(60);
+      }
+    }
+  });
+
+  it('alternates which side of the road they are on', () => {
+    // Otherwise the circuit reads as having been built along one edge of itself.
+    const sides = stands.sites.map((site) => site.side);
+    for (let i = 1; i < sides.length; i++) expect(sides[i]).toBe(-sides[i - 1]!);
+  });
+
+  it('seats a crowd, all of it clear of the racing surface', () => {
+    const crowd = namedMesh(stands.group, 'crowd');
+    expect(crowd.count).toBeGreaterThan(1000);
+
+    const matrix = new Matrix4();
+    const seat = new Vector3();
+    for (let i = 0; i < crowd.count; i++) {
+      crowd.getMatrixAt(i, matrix);
+      seat.setFromMatrixPosition(matrix);
+      const at = track.collision.query(seat);
+      expect(Math.abs(at.lateral)).toBeGreaterThan(track.frameAt(at.s).width * 0.5);
+      expect(seat.y).toBeGreaterThan(SEA_LEVEL);
+    }
+  });
+});
+
+describe('track pillars', () => {
+  const shafts = readBoxes(namedMesh(new TrackPillars(track).group, 'track-pillars'));
+
+  it('puts up a few, not a viaduct', () => {
+    expect(shafts.length).toBeGreaterThan(2);
+    expect(shafts.length).toBeLessThan(14);
+  });
+
+  it('stands every one of them in the water and under the road', () => {
+    for (const shaft of shafts) {
+      // The shaft's origin is its top, so `readBoxes` reports base as the top
+      // and top as one span above it.
+      expect(shaft.base).toBeGreaterThan(SEA_LEVEL);
+      expect(shaft.base - (shaft.top - shaft.base)).toBeLessThan(SEA_LEVEL);
+    }
+  });
+
+  it('never spears a traffic lane', () => {
+    const lanes = skyHighwayLanes(track);
+    for (const shaft of shafts) {
+      for (const lane of lanes) {
+        if (lane.altitude - LANE_CLEARANCE > shaft.base) continue;
+        const across = Math.abs(
+          (shaft.centre.x - lane.originX) * lane.dirZ - (shaft.centre.z - lane.originZ) * lane.dirX,
+        );
+        expect(across).toBeGreaterThan(LANE_HALF_WIDTH);
+      }
+    }
+  });
+
+  it('never stands one inside a tunnel', () => {
+    for (const shaft of shafts) {
+      expect(track.isInTunnel(track.collision.query(shaft.centre).s)).toBe(false);
+    }
+  });
+});
+
+/**
+ * The crowd noise's one piece of real arithmetic.
+ *
+ * The lap wraps, so the stand at the grid is beside a craft coming out of the
+ * last corner rather than a full lap away from it. Get that wrong and the pit
+ * straight's crowd cuts out at the line, which is the one place it must not.
+ */
+describe('crowd placement', () => {
+  const LENGTH = 3000;
+  const site = (s: number, side: -1 | 1): StandSite => ({ position: new Vector3(), s, side });
+
+  it('is silent with nothing to hear', () => {
+    expect(placeCrowd(100, LENGTH, [])).toEqual({ level: 0, pan: 0 });
+  });
+
+  it('is loudest alongside the stand', () => {
+    const at = placeCrowd(300, LENGTH, [site(300, 1)]);
+    expect(at.level).toBeCloseTo(1, 6);
+    expect(at.pan).toBeCloseTo(1, 6);
+  });
+
+  it('hears the grid stand from the last corner', () => {
+    // Forty metres short of the line, with the stand ten metres past it.
+    const wrapped = placeCrowd(LENGTH - 40, LENGTH, [site(10, -1)]);
+    const same = placeCrowd(60, LENGTH, [site(10, -1)]);
+    expect(wrapped.level).toBeCloseTo(same.level, 6);
+    expect(wrapped.level).toBeGreaterThan(0.6);
+  });
+
+  it('centres a stand that is still ahead and swings it out on the way past', () => {
+    const stand = [site(1500, 1)];
+    const far = placeCrowd(1300, LENGTH, stand);
+    const close = placeCrowd(1470, LENGTH, stand);
+
+    expect(far.pan).toBe(0);
+    expect(close.pan).toBeGreaterThan(far.pan);
+    expect(close.level).toBeGreaterThan(far.level);
+  });
+
+  it('picks the nearest of several', () => {
+    const many = [site(200, 1), site(1200, -1), site(2400, 1)];
+    expect(placeCrowd(1250, LENGTH, many).pan).toBeLessThan(0);
+    expect(placeCrowd(2350, LENGTH, many).pan).toBeGreaterThan(0);
+  });
+
+  it('goes quiet between stands', () => {
+    expect(placeCrowd(750, LENGTH, [site(0, 1), site(1500, -1)]).level).toBe(0);
   });
 });

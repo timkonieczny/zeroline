@@ -16,6 +16,20 @@ const ENGINE_HIGH = 168;
 /** Cutoff of the engine's low-pass at rest and flat out, in Hz. */
 const ENGINE_FILTER_LOW = 260;
 const ENGINE_FILTER_HIGH = 3200;
+/**
+ * The crowd's voice, in Hz.
+ *
+ * Two resonances over a noise bed. A stand full of people is not white noise —
+ * it has a formant around the vowel everybody is shouting and a hiss on top of
+ * it, and those two numbers are the whole difference between a crowd and rain.
+ */
+const CROWD_BODY = 620;
+const CROWD_AIR = 2600;
+/** How long the crowd takes to swell and fade as a craft passes, in seconds. */
+const CROWD_GLIDE = 0.22;
+/** Loudest the crowd ever gets, against the effects bus. */
+const CROWD_PEAK = 0.24;
+
 /** Root of the ambient pad, in Hz. A low D. */
 const PAD_ROOT = 73.42;
 
@@ -44,6 +58,13 @@ export class Audio {
     noiseGain: GainNode;
     filter: BiquadFilterNode;
     gain: GainNode;
+  } | null = null;
+
+  private crowd: {
+    noise: AudioBufferSourceNode;
+    gain: GainNode;
+    panner: StereoPannerNode;
+    body: BiquadFilterNode;
   } | null = null;
 
   private padVoices: { osc: OscillatorNode; gain: GainNode; filter: BiquadFilterNode }[] = [];
@@ -178,6 +199,11 @@ export class Audio {
   setEngineMuted(muted: boolean): void {
     if (muted === this.engineMuted) return;
     this.engineMuted = muted;
+    if (muted && this.crowd && this.context) {
+      // The crowd is driven from the player's position, which the pause panel
+      // freezes: without this it holds whatever roar it was on, forever.
+      this.crowd.gain.gain.setTargetAtTime(0, this.context.currentTime, 0.05);
+    }
     if (!muted || !this.engine || !this.context) return;
     // Only the fade down is written here; `updateEngine` brings it back on the
     // first frame after the panel closes, from wherever the ramp left it.
@@ -374,6 +400,83 @@ export class Audio {
     this.padVoices = [];
   }
 
+  // --- Crowd ------------------------------------------------------------
+
+  /**
+   * Brings up the grandstands. Idempotent.
+   *
+   * Synthesised like everything else: a noise loop through a resonant peak at
+   * the vowel a crowd shouts and a wide shelf of air above it. It is panned
+   * with a `StereoPannerNode` rather than through Three's `PositionalAudio`,
+   * because the whole of that machinery — an `AudioListener` in the scene
+   * graph, an HRTF panner per source — exists to work out a gain and a pan
+   * from two transforms, and the director already knows both. This is the same
+   * effect for one node and no scene-graph coupling.
+   */
+  startCrowd(): void {
+    const ctx = this.context;
+    if (!ctx || !this.effectsBus || this.crowd || !this.noiseBuffer) return;
+
+    const noise = ctx.createBufferSource();
+    noise.buffer = this.noiseBuffer;
+    noise.loop = true;
+
+    const body = ctx.createBiquadFilter();
+    body.type = 'bandpass';
+    body.frequency.value = CROWD_BODY;
+    // Broad. A narrow Q here whistles, which reads as a kettle rather than a
+    // hundred people.
+    body.Q.value = 0.7;
+
+    const air = ctx.createBiquadFilter();
+    air.type = 'highshelf';
+    air.frequency.value = CROWD_AIR;
+    air.gain.value = -9;
+
+    const panner = ctx.createStereoPanner();
+    const gain = ctx.createGain();
+    gain.gain.value = 0;
+
+    noise.connect(body);
+    body.connect(air);
+    air.connect(panner);
+    panner.connect(gain);
+    gain.connect(this.effectsBus);
+    noise.start();
+
+    this.crowd = { noise, gain, panner, body };
+  }
+
+  /**
+   * Places the crowd relative to the listener.
+   *
+   * @param level 0 when the nearest stand is out of earshot, 1 alongside it.
+   * @param pan -1 hard left, 1 hard right.
+   * @param excitement Raises the formant a little, so a close pass sounds like
+   *   the stand getting to its feet rather than merely getting louder.
+   */
+  setCrowd(level: number, pan: number, excitement = 0): void {
+    const ctx = this.context;
+    if (!ctx || !this.crowd) return;
+    const target = this.engineMuted ? 0 : clamp01(level) * CROWD_PEAK;
+    const now = ctx.currentTime;
+    this.crowd.gain.gain.setTargetAtTime(target, now, CROWD_GLIDE);
+    this.crowd.panner.pan.setTargetAtTime(Math.max(-1, Math.min(1, pan)), now, CROWD_GLIDE);
+    this.crowd.body.frequency.setTargetAtTime(
+      CROWD_BODY * (1 + clamp01(excitement) * 0.35),
+      now,
+      CROWD_GLIDE * 2,
+    );
+  }
+
+  stopCrowd(): void {
+    if (!this.crowd || !this.context) return;
+    const { noise, gain } = this.crowd;
+    gain.gain.setTargetAtTime(0, this.context.currentTime, 0.1);
+    window.setTimeout(() => noise.stop(), 500);
+    this.crowd = null;
+  }
+
   /** Ducks the music while something loud is happening. */
   duckMusic(amount: number, seconds = 0.8): void {
     const ctx = this.context;
@@ -385,6 +488,7 @@ export class Audio {
 
   dispose(): void {
     this.stopEngine();
+    this.stopCrowd();
     this.stopAmbience();
     void this.context?.close().catch(() => undefined);
     this.context = null;

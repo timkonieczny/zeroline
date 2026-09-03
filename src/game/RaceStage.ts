@@ -5,6 +5,8 @@ import { TrackMesh } from '@/track/TrackMesh';
 import { Environment } from '@/track/scenery/Environment';
 import { Skyline } from '@/track/scenery/Skyline';
 import { SkyHighway } from '@/track/scenery/SkyHighway';
+import { TrackPillars } from '@/track/scenery/TrackPillars';
+import { Grandstands } from '@/track/scenery/Grandstands';
 import { StartLine } from '@/track/scenery/StartLine';
 import { TrackMarkings } from '@/track/scenery/TrackMarkings';
 import { TunnelGlass } from '@/track/scenery/TunnelGlass';
@@ -56,6 +58,8 @@ export class RaceStage {
   private readonly environment: Environment;
   private readonly skyline: Skyline;
   private readonly highway: SkyHighway;
+  private readonly pillars: TrackPillars;
+  readonly grandstands: Grandstands;
   private readonly startLine: StartLine;
   private readonly markings: TrackMarkings;
   private readonly tunnelGlass: TunnelGlass;
@@ -85,11 +89,18 @@ export class RaceStage {
     this.environment = new Environment(this.track, loaded?.waterNormals);
     this.environment.applyTo(this.scene, renderer.renderer);
 
-    this.skyline = new Skyline(this.track);
+    // Before the skyline, which is then told to build around them.
+    this.grandstands = new Grandstands(this.track);
+    this.scene.add(this.grandstands.group);
+
+    this.skyline = new Skyline(this.track, this.grandstands.footprints);
     this.scene.add(this.skyline.group);
 
     this.highway = new SkyHighway(this.track);
     this.scene.add(this.highway.group);
+
+    this.pillars = new TrackPillars(this.track);
+    this.scene.add(this.pillars.group);
 
     this.startLine = new StartLine(this.track);
     this.scene.add(this.startLine.group);
@@ -255,6 +266,7 @@ export class RaceStage {
     }
     this.environment.update(camera.position);
     this.highway.update(dt);
+    this.grandstands.update(dt);
     this.startLine.update(1 - this.race.countdown / COUNTDOWN, this.race.time >= 0 ? this.race.time : -1);
     this.ordnance.update(this.race.projectiles);
     this.sparks.update(this.race.craft, dt);
@@ -272,6 +284,8 @@ export class RaceStage {
     this.environment.dispose();
     this.skyline.dispose();
     this.highway.dispose();
+    this.pillars.dispose();
+    this.grandstands.dispose();
     this.startLine.dispose();
     this.markings.dispose();
     this.tunnelGlass.dispose();
