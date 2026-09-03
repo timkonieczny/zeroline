@@ -59,9 +59,9 @@ export const GLASS_MARGIN = 4.4;
  */
 const GLASS_MAX_HEIGHT = 18;
 /** Metres of glass in one panel, and metres of road between panels. */
-const GLASS_PANEL = 46;
-const GLASS_GAP = 155;
-/** At most this many, because the point is the surprise rather than the floor. */
+const GLASS_PANEL = 230;
+const GLASS_GAP = 95;
+/** At most this many. The low run only has room for a couple at this length. */
 const GLASS_PANELS = 4;
 /** Metres of road either side of a tunnel mouth that stay solid. */
 const GLASS_TUNNEL_MARGIN = 70;

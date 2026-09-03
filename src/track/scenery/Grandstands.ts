@@ -11,7 +11,6 @@ import {
   Vector3,
 } from 'three';
 import { MeshStandardNodeMaterial } from 'three/webgpu';
-import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import {
   Fn,
   attribute,
@@ -20,7 +19,6 @@ import {
   positionLocal,
   sin,
   smoothstep,
-  step,
   uniform,
   vec3,
 } from 'three/tsl';
@@ -54,6 +52,18 @@ const BARRIER_HEIGHT = 2.2;
  * of steps with gaps in it. Overlapping them buries the joint inside the solid.
  */
 const SECTION_OVERLAP = 1.1;
+/**
+ * How much every other section is shrunk, as a fraction.
+ *
+ * The overlap above is what closes the joints, but on a straight, level run two
+ * adjacent sections are the *same box* offset along the road — so the 1.2 m
+ * they share has coplanar faces, and the depth buffer cannot choose between
+ * them. It showed worst on the apron, which is the one large horizontal slab in
+ * the set. Shrinking alternate sections puts one strictly inside the other
+ * wherever they meet. Four parts in a thousand: five centimetres on a
+ * thirteen-metre box, well inside the overlap and far too little to see.
+ */
+const SECTION_BIAS = 0.004;
 /**
  * How far a canopy panel is turned off the road, in radians.
  *
@@ -113,8 +123,9 @@ const OCCUPANCY = 0.74;
 /** Rows that get anybody in them — the top two are gangway. */
 const OCCUPIED_TIERS = TIERS - 2;
 
-/** Local height above which a vertex belongs to the helmet, in metres. */
-const HELMET_LINE = 0.66;
+/** Where the visor band sits on a helmet, in local metres. */
+const HELMET_VISOR_LOW = 0.7;
+const HELMET_VISOR_HIGH = 0.8;
 /** How far a figure rises out of its seat at the top of a cheer, in metres. */
 const CHEER_LIFT = 0.17;
 /** Cheers a second, for the most placid spectator and the most excitable. */
@@ -208,6 +219,7 @@ export class Grandstands {
 
   private readonly structure: InstancedMesh;
   private readonly crowd: InstancedMesh;
+  private readonly helmets: InstancedMesh;
   private readonly time: Scalar = scalar(0);
 
   constructor(track: Track) {
@@ -238,8 +250,8 @@ export class Grandstands {
     this.structure.receiveShadow = true;
 
     this.crowd = new InstancedMesh(
-      Grandstands.figure(),
-      Grandstands.crowdMaterial(this.time),
+      Grandstands.body(),
+      Grandstands.crowdMaterial(this.time, true),
       CROWD_CAPACITY,
     );
     this.crowd.name = 'crowd';
@@ -249,15 +261,19 @@ export class Grandstands {
     this.crowd.castShadow = false;
     this.crowd.receiveShadow = true;
 
+    this.helmets = new InstancedMesh(
+      Grandstands.helmet(),
+      Grandstands.crowdMaterial(this.time, false),
+      CROWD_CAPACITY,
+    );
+    this.helmets.name = 'crowd-helmets';
+    this.helmets.castShadow = false;
+    this.helmets.receiveShadow = true;
+
+    // One attribute, shared by both halves of a figure so they cheer together.
     const cheer = new InstancedBufferAttribute(new Float32Array(CROWD_CAPACITY * 2), 2);
     this.crowd.geometry.setAttribute('cheer', cheer);
-    // Clothing goes in an attribute of its own rather than through
-    // `setColorAt`. The instance colour multiplies the whole `colorNode`,
-    // helmet included, so a spectator in a red shirt got a red helmet — which
-    // with the old muted palette was invisible and with this one is the only
-    // thing you see.
-    const shirt = new InstancedBufferAttribute(new Float32Array(CROWD_CAPACITY * 3), 3);
-    this.crowd.geometry.setAttribute('shirt', shirt);
+    this.helmets.geometry.setAttribute('cheer', cheer);
 
     const footprints: Footprint[] = [];
     let structureCount = 0;
@@ -275,7 +291,6 @@ export class Grandstands {
         Math.min(share, CROWD_CAPACITY - crowdCount),
         rng,
         cheer,
-        shirt,
         colour,
       );
 
@@ -311,12 +326,14 @@ export class Grandstands {
     if (this.structure.instanceColor) this.structure.instanceColor.needsUpdate = true;
     this.crowd.count = crowdCount;
     this.crowd.instanceMatrix.needsUpdate = true;
+    if (this.crowd.instanceColor) this.crowd.instanceColor.needsUpdate = true;
+    this.helmets.count = crowdCount;
+    this.helmets.instanceMatrix.needsUpdate = true;
     cheer.needsUpdate = true;
-    shirt.needsUpdate = true;
 
     this.sites = sites;
     this.footprints = footprints;
-    this.group.add(this.structure, this.crowd);
+    this.group.add(this.structure, this.crowd, this.helmets);
   }
 
   /** Advances the cheer. The only per-frame work the crowd does. */
@@ -325,7 +342,7 @@ export class Grandstands {
   }
 
   dispose(): void {
-    for (const mesh of [this.structure, this.crowd]) {
+    for (const mesh of [this.structure, this.crowd, this.helmets]) {
       mesh.geometry.dispose();
       (mesh.material as { dispose(): void }).dispose();
     }
@@ -389,6 +406,8 @@ export class Grandstands {
     let count = start;
     const section = STAND_LENGTH / STAND_SEGMENTS;
     const run = section * SECTION_OVERLAP;
+    /** Set per section, so `place` does not need the index threaded into it. */
+    let bias = 1;
 
     /** One box, seated in the road's frame at this station. */
     const place = (
@@ -414,7 +433,7 @@ export class Grandstands {
         .copy(frame.position)
         .addScaledVector(frame.right, across)
         .addScaledVector(frame.up, up);
-      _dummy.scale.set(width, height, length);
+      _dummy.scale.set(width * bias, height * bias, length * bias);
       _dummy.updateMatrix();
       this.structure.setMatrixAt(count, _dummy.matrix);
       this.structure.setColorAt(count, _tone.setHex(tone));
@@ -422,6 +441,7 @@ export class Grandstands {
     };
 
     for (let i = 0; i < STAND_SEGMENTS; i++) {
+      bias = i % 2 === 0 ? 1 : 1 - SECTION_BIAS;
       const s = midS - STAND_LENGTH * 0.5 + section * (i + 0.5);
       const frame = track.frameAt((s + track.length) % track.length);
       const front = frame.width * 0.5 + STAND_SETBACK;
@@ -478,7 +498,6 @@ export class Grandstands {
     budget: number,
     rng: Rng,
     cheer: InstancedBufferAttribute,
-    shirt: InstancedBufferAttribute,
     colour: Color,
   ): number {
     let count = start;
@@ -509,6 +528,7 @@ export class Grandstands {
         _dummy.scale.setScalar(rng.range(0.9, 1.06));
         _dummy.updateMatrix();
         this.crowd.setMatrixAt(count, _dummy.matrix);
+        this.helmets.setMatrixAt(count, _dummy.matrix);
 
         // Phase and rate, so no two neighbours are ever quite in time.
         cheer.setXY(count, rng.range(0, Math.PI * 2), rng.range(CHEER_RATE_LOW, CHEER_RATE_HIGH));
@@ -518,7 +538,7 @@ export class Grandstands {
         // the road is white, and the stands are steel. Saturated, and kept off
         // the very light end so a figure never disappears into its own helmet.
         colour.setHSL(rng.next(), rng.range(0.55, 0.92), rng.range(0.3, 0.56));
-        shirt.setXYZ(count, colour.r, colour.g, colour.b);
+        this.crowd.setColorAt(count, colour);
 
         count++;
       }
@@ -529,47 +549,54 @@ export class Grandstands {
   // --- Geometry and materials ----------------------------------------------
 
   /**
-   * One seated figure: a tapered body with a helmet on it.
+   * A spectator's body, and a spectator's helmet.
    *
-   * Merged into a single geometry rather than left as two meshes, so the crowd
-   * is one draw call and one instance table. Both halves are as coarse as they
-   * can be — five sides on the body, an unsubdivided icosahedron for the
-   * helmet — because this is forty triangles multiplied by two and a half
-   * thousand.
+   * Two meshes rather than one merged geometry, and the split is not about
+   * triangles — it is the only way the helmet can keep its own colour. Three's
+   * instance colour multiplies the *whole* of a material's `colorNode`, so a
+   * figure in a red shirt got a red helmet as well; and moving the clothing
+   * into a custom instanced attribute instead left whole stands rendering
+   * without it. The body takes the instance colour, the helmet has no instance
+   * colour at all, and neither needs an attribute that might not arrive.
+   *
+   * Both are as coarse as they can be — five sides on the body, an
+   * unsubdivided icosahedron for the helmet — because this is forty triangles
+   * multiplied by three thousand.
    */
-  private static figure(): BufferGeometry {
-    const body = new CylinderGeometry(0.2, 0.27, 0.62, 5, 1).toNonIndexed();
+  private static body(): BufferGeometry {
+    const body = new CylinderGeometry(0.2, 0.27, 0.62, 5, 1);
     body.translate(0, 0.31, 0);
-    // Already non-indexed, which is why the body is flattened to match:
-    // `mergeGeometries` refuses a mixed pair and returns null rather than throw.
+    return body;
+  }
+
+  private static helmet(): BufferGeometry {
     const head = new IcosahedronGeometry(0.145, 0);
     head.translate(0, 0.78, 0);
-    const merged = mergeGeometries([body, head], false);
-    head.dispose();
-    if (!merged) return body;
-    body.dispose();
-    return merged;
+    return head;
   }
 
   /**
-   * The crowd's material: cheering in the vertex stage, a visor in the fragment.
+   * A spectator, cheering in the vertex stage.
    *
-   * The animation has to live here rather than on the CPU. Two and a half
-   * thousand matrices rewritten every frame would cost more than the rest of
-   * the scenery put together — and it would have to be fed the render's delta,
-   * which is the one number simulation code must never see.
+   * The animation has to live here rather than on the CPU. Three thousand
+   * matrices rewritten every frame would cost more than the rest of the
+   * scenery put together — and it would have to be fed the render's delta,
+   * which is the one number simulation code must never see. Both halves of a
+   * figure read the same `cheer` attribute, so they rise together.
+   *
+   * @param cloth Clothing, which takes its colour from the instance; otherwise
+   *   the helmet, which is metal with a dark visor band across it and is
+   *   deliberately given no instance colour to be tinted by.
    */
-  private static crowdMaterial(time: Scalar): MeshStandardNodeMaterial {
+  private static crowdMaterial(time: Scalar, cloth: boolean): MeshStandardNodeMaterial {
     const material = new MeshStandardNodeMaterial();
     const cheer = attribute<'vec2'>('cheer', 'vec2');
-    const shirt = attribute<'vec3'>('shirt', 'vec3');
-    const helmet = step(float(HELMET_LINE), positionLocal.y);
 
     material.positionNode = Fn(() => {
       // Straight up and straight back down, and nothing else. An added sway
-      // put every figure on its own little ellipse, and a stand of two and a
-      // half thousand people stirring in circles reads as a liquid rather than
-      // as a crowd getting to its feet.
+      // put every figure on its own little ellipse, and a stand of three
+      // thousand people stirring in circles reads as a liquid rather than as a
+      // crowd getting to its feet.
       const beat = time.mul(cheer.y).add(cheer.x);
       const local = positionLocal.toVar();
       // Squared, so the rise is quick and the settle slow — which is what a
@@ -578,20 +605,24 @@ export class Grandstands {
       return vec3(local.x, local.y.add(lift), local.z);
     })();
 
+    if (cloth) {
+      // White, so the instance colour multiplying through it *is* the shirt.
+      material.color = new Color(0xffffff);
+      material.roughness = 0.85;
+      material.metalness = 0;
+      return material;
+    }
+
     material.colorNode = Fn(() => {
       // The visor: a dark band across the middle of the helmet. From the road
       // this is the entire character, and it is two smoothsteps.
-      const visor = smoothstep(float(0.7), float(0.72), positionLocal.y).mul(
-        smoothstep(float(0.8), float(0.78), positionLocal.y),
+      const visor = smoothstep(float(HELMET_VISOR_LOW), float(HELMET_VISOR_LOW + 0.02), positionLocal.y).mul(
+        smoothstep(float(HELMET_VISOR_HIGH), float(HELMET_VISOR_HIGH - 0.02), positionLocal.y),
       );
-      const shell = mix(vec3(0.78, 0.79, 0.82), vec3(0.03, 0.04, 0.05), visor);
-      // The helmet keeps its own metal whatever the spectator is wearing.
-      return mix(shirt, shell, helmet);
+      return mix(vec3(0.78, 0.79, 0.82), vec3(0.03, 0.04, 0.05), visor);
     })();
-
-    // Chrome above the shoulders, cloth below them.
-    material.roughnessNode = mix(float(0.85), float(0.22), helmet);
-    material.metalnessNode = helmet.mul(0.85);
+    material.roughness = 0.22;
+    material.metalness = 0.85;
     return material;
   }
 

@@ -132,7 +132,11 @@ tests/       Vitest suites for the simulation
   its pitch — cut to the pitch they meet only on their centrelines and the canopy reads as a
   flight of steps with daylight between them. The canopy panels are then deliberately skewed
   and staggered against each other: a shallow roof over a hundred metres is one flat rectangle
-  in almost every shot, and turning the plates gives it an edge to catch the sun on. The crowd is a tapered cylinder with a sphere on it; the
+  in almost every shot, and turning the plates gives it an edge to catch the sun on. Alternate
+  sections are also shrunk four parts in a thousand — the overlap closes the joints, but on a
+  level straight two neighbours are the *same box* offset along the road, and the metre they
+  share has coplanar faces the depth buffer cannot choose between. It showed on the apron,
+  which is the one large horizontal slab in the set. The crowd is a tapered cylinder with a sphere on it; the
   Daft Punk read is entirely the helmet, which is metal above a local-Y line with a dark band
   smoothstepped across it. Cheering is `sin(time·rate + phase)` in the vertex shader off a
   per-instance attribute, so the CPU never touches a figure after load and a full house costs
@@ -163,6 +167,14 @@ Both were found by measurement, and both would be easy to reintroduce:
 
 ## Two things that are easy to get wrong twice
 
+- **Per-instance colour goes through `setColorAt`, not a custom attribute.** The crowd's
+  clothing was a `vec3` instanced attribute read with `attribute('shirt')`, alongside the
+  `cheer` attribute the animation uses. It worked for the first few stands and rendered every
+  later one flat grey — with the right values sitting in the buffer at exactly those indices,
+  and a constant emissive test proving the material was fine. Not a count boundary and not
+  lighting. Whatever the cause, `instanceColor` is the path three actually maintains. It
+  multiplies the *whole* `colorNode` though, helmet included, which is why the crowd is two
+  meshes: bodies take the instance colour, helmets have none to be tinted by.
 - **A track frame is left-handed.** `right` is `tangent × up`, so
   `makeBasis(right, up, tangent)` has determinant −1. A quaternion cannot hold a reflection, so
   `setFromRotationMatrix` silently discards it and hands back an unrelated rotation — the
