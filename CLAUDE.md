@@ -124,14 +124,14 @@ tests/       Vitest suites for the simulation
   margin left along each edge) and `scenery/TunnelGlass` fills it with the same pane it uses
   under a tunnel. Both read the same function, because the day they disagree is the day there
   is a gap in the circuit somebody drives through.
-- **`track/scenery/PlatformTrees.ts`** — about 380 street trees on the concrete decks the tower
-  clusters stand on. The slabs are laid nine metres clear of their buildings, which left a
-  border of bare concrete standing out of the sea; planting it turns a slab into a place. One
-  tree is 80 triangles and the lot is two instanced draws with no per-frame cost — a quarter of
-  what the crowd already costs. Trunk and crown are separate meshes for the same reason the
-  crowd's bodies and helmets are. Placement is dart-throwing, not a grid, and it checks the
-  road *above* each spot: platforms are allowed to sit under the circuit where it is high, but a
-  nine-metre tree on one is not.
+- **`track/scenery/PlatformParks.ts`** — parks on the concrete decks the tower clusters stand
+  on. The ground is laid out before anything is planted: a promenade round every deck, cross
+  paths threaded *between* the towers rather than through them, lawns in the blocks that are
+  left, and a tree only ever on a lawn. Trees dotted straight onto concrete read as weeds, which
+  is what this replaced. Four instanced draws, 62k triangles, no per-frame cost — half what the
+  crowd costs. Trunk and crown are separate meshes for the same reason the crowd's bodies and
+  helmets are. Placement checks the road *above* each spot: platforms are allowed to sit under
+  the circuit where it is high, but a nine-metre tree on one is not.
 - **`track/scenery/Grandstands.ts`** — stands on the straights and a facing pair at the grid,
   with about 3000 spectators in one instanced draw. `STAND_LIFT` is derived from the sight line
   rather than chosen: the shortest spectator in the front row has to see over `WALL_HEIGHT`,

@@ -4,7 +4,7 @@ import type { LoadedTrack } from '@/track/TrackLoader';
 import { TrackMesh } from '@/track/TrackMesh';
 import { Environment } from '@/track/scenery/Environment';
 import { Skyline } from '@/track/scenery/Skyline';
-import { PlatformTrees } from '@/track/scenery/PlatformTrees';
+import { PlatformParks } from '@/track/scenery/PlatformParks';
 import { SkyHighway } from '@/track/scenery/SkyHighway';
 import { TrackPillars } from '@/track/scenery/TrackPillars';
 import { Grandstands } from '@/track/scenery/Grandstands';
@@ -58,7 +58,7 @@ export class RaceStage {
   private readonly trackMesh: TrackMesh;
   private readonly environment: Environment;
   private readonly skyline: Skyline;
-  private readonly trees: PlatformTrees;
+  private readonly parks: PlatformParks;
   private readonly highway: SkyHighway;
   private readonly pillars: TrackPillars;
   readonly grandstands: Grandstands;
@@ -99,8 +99,8 @@ export class RaceStage {
     this.scene.add(this.skyline.group);
 
     // After the skyline, which is what decides where the platforms are.
-    this.trees = new PlatformTrees(this.skyline.platforms, this.track);
-    this.scene.add(this.trees.group);
+    this.parks = new PlatformParks(this.skyline.platforms, this.track);
+    this.scene.add(this.parks.group);
 
     this.highway = new SkyHighway(this.track);
     this.scene.add(this.highway.group);
@@ -320,7 +320,7 @@ export class RaceStage {
     this.trackMesh.dispose();
     this.environment.dispose();
     this.skyline.dispose();
-    this.trees.dispose();
+    this.parks.dispose();
     this.highway.dispose();
     this.pillars.dispose();
     this.grandstands.dispose();

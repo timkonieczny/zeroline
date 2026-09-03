@@ -5,7 +5,7 @@ import { meridianCoast } from '@/data/tracks/meridian-coast';
 import { Skyline } from '@/track/scenery/Skyline';
 import { Grandstands, type StandSite } from '@/track/scenery/Grandstands';
 import { TrackPillars } from '@/track/scenery/TrackPillars';
-import { PlatformTrees } from '@/track/scenery/PlatformTrees';
+import { PlatformParks } from '@/track/scenery/PlatformParks';
 import { SEA_LEVEL } from '@/track/scenery/Environment';
 import { WALL_HEIGHT } from '@/track/TrackGeometry';
 
@@ -63,7 +63,7 @@ const stands = new Grandstands(track);
 // Built the way the stage builds it: the stands first, the city around them.
 const skyline = new Skyline(track, stands.footprints);
 const pillars = new TrackPillars(track);
-const trees = new PlatformTrees(skyline.platforms, track);
+const parks = new PlatformParks(skyline.platforms, track);
 
 function namedMesh(group: { children: { name: string }[] }, name: string): InstancedMesh {
   const mesh = group.children.find((child) => child.name === name);
@@ -329,40 +329,96 @@ describe('grandstands', () => {
   });
 });
 
+/** Every instance of a mesh as a flat axis-aligned patch, for the parks. */
+function patches(mesh: InstancedMesh): { x: number; z: number; w: number; d: number; y: number }[] {
+  const matrix = new Matrix4();
+  const position = new Vector3();
+  const scale = new Vector3();
+  const spin = new Quaternion();
+  const out: { x: number; z: number; w: number; d: number; y: number }[] = [];
+  for (let i = 0; i < mesh.count; i++) {
+    mesh.getMatrixAt(i, matrix);
+    matrix.decompose(position, spin, scale);
+    out.push({ x: position.x, z: position.z, w: scale.x, d: scale.z, y: position.y + scale.y });
+  }
+  return out;
+}
+
 /**
- * The trees planted on the platforms the towers stand on.
+ * The parks laid out on the platforms the towers stand on.
  *
- * The slabs are laid at the waterline and the circuit runs over them, so a
- * platform is *allowed* under the road — but a nine-metre tree on top of one is
- * not, and the closest planting spot on this circuit had eleven metres of
+ * The rule that matters is that the ground is *planned*: a promenade round
+ * every deck, lawns in what is left, and a tree only ever on a lawn. Trees
+ * dotted straight onto concrete read as weeds, which is what this replaced.
+ *
+ * The other rule is vertical. The slabs sit at the waterline and the circuit
+ * runs over them, so a platform is allowed under the road — but a nine-metre
+ * tree on one is not, and the closest planting spot had eleven metres of
  * headroom against a tree that can reach eleven and a half.
  */
-describe('platform trees', () => {
-  const planted = readBoxes(namedMesh(trees.group, 'platform-trees'));
+describe('platform parks', () => {
+  const lawns = patches(namedMesh(parks.group, 'platform-lawns'));
+  const paths = patches(namedMesh(parks.group, 'platform-paths'));
+  const planted = readBoxes(namedMesh(parks.group, 'platform-trees'));
 
-  it('plants a few hundred', () => {
-    expect(planted.length).toBeGreaterThan(150);
+  it('lays paths and lawns on the decks, and plants a few hundred trees', () => {
+    expect(paths.length).toBeGreaterThan(30);
+    expect(lawns.length).toBeGreaterThan(10);
+    expect(planted.length).toBeGreaterThan(100);
   });
 
-  it('stands every one of them on a platform, clear of the buildings', () => {
+  it('gives every deck a promenade round its edge', () => {
+    // Four strips apiece, laid before anything else, on every platform big
+    // enough to walk on. It is what makes a slab read as somewhere.
+    for (const platform of skyline.platforms) {
+      const onIt = paths.filter(
+        (p) =>
+          Math.abs(p.x - platform.centreX) <= platform.width * 0.5 &&
+          Math.abs(p.z - platform.centreZ) <= platform.depth * 0.5,
+      );
+      if (platform.width < 30 || platform.depth < 30) continue;
+      expect(onIt.length, `platform at ${platform.centreX.toFixed(0)}`).toBeGreaterThanOrEqual(4);
+    }
+  });
+
+  it('keeps paths and lawns off the buildings', () => {
+    // Seventeen pairs of platforms overlap in plan with their decks only a few
+    // metres apart, so a slab cannot be attributed to one of them from its
+    // transform alone. What can be asserted is that every piece belongs to
+    // *some* deck it fits on and clears — it was laid on exactly one.
+    const clears = (piece: (typeof lawns)[number], platform: (typeof skyline.platforms)[number]) =>
+      platform.occupied.every((building) => {
+        const dx = Math.max(0, Math.abs(building.x - piece.x) - piece.w * 0.5);
+        const dz = Math.max(0, Math.abs(building.z - piece.z) - piece.d * 0.5);
+        return Math.hypot(dx, dz) > building.radius;
+      });
+
+    for (const piece of [...lawns, ...paths]) {
+      const home = skyline.platforms.some(
+        (platform) =>
+          piece.y - platform.topY > 0 &&
+          piece.y - platform.topY < 1 &&
+          Math.abs(piece.x - platform.centreX) <= platform.width * 0.5 &&
+          Math.abs(piece.z - platform.centreZ) <= platform.depth * 0.5 &&
+          clears(piece, platform),
+      );
+      expect(home, `slab at ${piece.x.toFixed(0)},${piece.z.toFixed(0)} sits on nothing it clears`)
+        .toBe(true);
+    }
+  });
+
+  it('stands every tree on a lawn', () => {
     for (const tree of planted) {
-      // Platforms can overlap in plan, so the one a tree belongs to is the one
-      // it is standing *on* — matched by deck height, not just by footprint.
-      const platform = skyline.platforms.find(
-        (deck) =>
-          Math.abs(deck.topY - tree.base) < 0.001 &&
-          Math.abs(tree.centre.x - deck.centreX) <= deck.width * 0.5 &&
-          Math.abs(tree.centre.z - deck.centreZ) <= deck.depth * 0.5,
+      const lawn = lawns.find(
+        (l) =>
+          Math.abs(l.y - tree.base) < 0.001 &&
+          Math.abs(tree.centre.x - l.x) <= l.w * 0.5 &&
+          Math.abs(tree.centre.z - l.z) <= l.d * 0.5,
       );
       expect(
-        platform,
-        `tree at ${tree.centre.x.toFixed(0)},${tree.centre.z.toFixed(0)} is on nothing`,
+        lawn,
+        `tree at ${tree.centre.x.toFixed(0)},${tree.centre.z.toFixed(0)} is on bare concrete`,
       ).toBeDefined();
-
-      for (const building of platform!.occupied) {
-        const gap = Math.hypot(tree.centre.x - building.x, tree.centre.z - building.z);
-        expect(gap).toBeGreaterThan(building.radius);
-      }
     }
   });
 
