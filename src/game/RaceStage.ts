@@ -1,4 +1,4 @@
-import { Quaternion, Scene, Vector3, type PerspectiveCamera } from 'three';
+import { Quaternion, Scene, Vector3, type Object3D, type PerspectiveCamera } from 'three';
 import { Track } from '@/track/Track';
 import type { LoadedTrack } from '@/track/TrackLoader';
 import { TrackMesh } from '@/track/TrackMesh';
@@ -207,8 +207,29 @@ export class RaceStage {
   }
 
   /** Places the camera where shot `index` will put it, for warming pipelines. */
-  previewIntroShot(index: number, camera: PerspectiveCamera): void {
-    this.intro?.preview(index, camera, this.track);
+  previewIntroShot(index: number, camera: PerspectiveCamera, at = 0.5): void {
+    this.intro?.preview(index, camera, this.track, at);
+  }
+
+  /**
+   * Turns frustum culling off across the circuit, and hands back the undo.
+   *
+   * Only for the warm-up. A pipeline is built the first time its object is
+   * actually drawn, so anything outside the frustum of a warm frame is a stall
+   * still waiting to happen — and with the camera teleporting between shots,
+   * most of the circuit is outside most of them. One uncullied frame draws the
+   * lot.
+   */
+  suspendCulling(): () => void {
+    const culled: { object: Object3D; was: boolean }[] = [];
+    this.scene.traverse((object) => {
+      if (!object.frustumCulled) return;
+      culled.push({ object, was: true });
+      object.frustumCulled = false;
+    });
+    return () => {
+      for (const entry of culled) entry.object.frustumCulled = entry.was;
+    };
   }
 
   /** Cuts the intro short, leaving it just enough to settle. */

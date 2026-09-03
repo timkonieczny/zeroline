@@ -148,6 +148,13 @@ tests/       Vitest suites for the simulation
 
 ## Things that were slow, and why they are not any more
 
+- **The intro's cuts stalled for a second each.** Every pass a frame is made of — the shadow
+  cascade, the water's reflection, the post chain's depth buffer — builds its state the first
+  time it is asked for, and a camera that teleports across the circuit asks for all of it at
+  once. `App.warmPipelines` draws each shot behind the curtain, from both ends of its move and
+  **with frustum culling suspended across the scene**: a pipeline is built when its object is
+  first *drawn*, so anything culled during a warm frame is a stall still waiting to happen.
+
 Both were found by measurement, and both would be easy to reintroduce:
 
 - **The racing line's relaxation** sampled the spline three times per point per pass — six

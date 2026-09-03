@@ -67,7 +67,7 @@ function uiScale(width: number, height: number): number {
 }
 
 /** Longest the loading screen waits on the driver's compile, in ms. */
-const PRECOMPILE_HOLD = 900;
+const PRECOMPILE_HOLD = 2400;
 
 /**
  * The menu does not need motion blur or speed streaks; it is not moving fast.
@@ -454,25 +454,37 @@ export class App {
       .catch(() => undefined);
     await Promise.race([compiled, App.wait(PRECOMPILE_HOLD)]);
 
-    // And then draw a frame from each shot the intro will cut to.
+    // And then draw frames from each shot the intro will cut to.
     //
     // Compiling a material is not the same as having drawn with it. Every pass
     // the frame is made of — the shadow map, the water's own reflection of the
     // scene, the post chain reading a depth buffer it has not seen this shape
     // of — builds its state the first time it is asked for, and a camera that
     // teleports across the circuit asks for all of it at once. That is the
-    // second-long stall on each cut. Paying it here costs three frames behind a
-    // curtain that is already up.
+    // stall on each cut.
+    //
+    // Culling is off for the whole of it. A pipeline is built when its object
+    // is first *drawn*, so anything outside the frustum of a warm frame is a
+    // stall still waiting to happen — and the camera teleports, so most of the
+    // circuit is outside most of them. Both ends of each shot's move are drawn
+    // too, because the shadow cascade and the water's reflection are fitted to
+    // the camera and the two ends are two different sets of work. One frame
+    // each: a pipeline is built by the first draw, and a second would only be
+    // buying temporal history that the next teleport throws away.
     const camera = this.renderer.camera;
     _warmPosition.copy(camera.position);
     _warmRotation.copy(camera.quaternion);
+    const restoreCulling = this.race.suspendCulling();
 
     for (let shot = 0; shot < this.race.introShots; shot++) {
-      this.race.previewIntroShot(shot, camera);
-      this.racePost.render();
-      await App.nextFrame();
+      for (const at of [0, 1]) {
+        this.race.previewIntroShot(shot, camera, at);
+        this.racePost.render();
+        await App.nextFrame();
+      }
     }
 
+    restoreCulling();
     camera.position.copy(_warmPosition);
     camera.quaternion.copy(_warmRotation);
   }

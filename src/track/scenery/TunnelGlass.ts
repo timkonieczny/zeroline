@@ -49,9 +49,17 @@ const INSET = 0.02;
 /** Width of the kerb strip, repeated from the road profile it is set into. */
 const ROAD_KERB = 1.4;
 
-/** Opacity face-on and at a grazing angle. */
-const CLEAR = 0.34;
-const GRAZING = 0.82;
+/**
+ * Opacity face-on and at a grazing angle.
+ *
+ * The grazing figure is the one that matters: a pane in the road is almost
+ * never looked at square on, and from a cockpit it is always seen at a slice.
+ * High enough and the Fresnel turns the whole panel into a mirror of the sky,
+ * which is a very convincing sheet of nothing. These are set so the sea still
+ * carries at the angle the circuit is actually driven at.
+ */
+const CLEAR = 0.18;
+const GRAZING = 0.52;
 
 /**
  * The glass floor that closes a tunnel underneath the road.

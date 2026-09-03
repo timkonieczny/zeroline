@@ -27,8 +27,14 @@ const CROWD_BODY = 620;
 const CROWD_AIR = 2600;
 /** How long the crowd takes to swell and fade as a craft passes, in seconds. */
 const CROWD_GLIDE = 0.22;
-/** Loudest the crowd ever gets, against the effects bus. */
-const CROWD_PEAK = 0.24;
+/**
+ * Loudest the crowd ever gets, against the effects bus.
+ *
+ * A grandstand alongside is meant to be the loudest thing in the race after
+ * the engine. It was set conservatively against a single stand and there are
+ * seven of them now, most of the lap within earshot of one.
+ */
+const CROWD_PEAK = 0.62;
 
 /** Root of the ambient pad, in Hz. A low D. */
 const PAD_ROOT = 73.42;

@@ -10,7 +10,7 @@ import { clamp01 } from '@/core/math';
  * switch on is worse than hearing it early. The falloff is squared, so most of
  * this distance is very quiet.
  */
-const EARSHOT = 280;
+const EARSHOT = 340;
 /**
  * Metres over which a stand swings from ahead of the listener to beside them.
  *
