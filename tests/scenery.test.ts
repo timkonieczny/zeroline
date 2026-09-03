@@ -5,6 +5,7 @@ import { meridianCoast } from '@/data/tracks/meridian-coast';
 import { Skyline } from '@/track/scenery/Skyline';
 import { Grandstands, type StandSite } from '@/track/scenery/Grandstands';
 import { TrackPillars } from '@/track/scenery/TrackPillars';
+import { PlatformTrees } from '@/track/scenery/PlatformTrees';
 import { SEA_LEVEL } from '@/track/scenery/Environment';
 import { WALL_HEIGHT } from '@/track/TrackGeometry';
 
@@ -62,6 +63,7 @@ const stands = new Grandstands(track);
 // Built the way the stage builds it: the stands first, the city around them.
 const skyline = new Skyline(track, stands.footprints);
 const pillars = new TrackPillars(track);
+const trees = new PlatformTrees(skyline.platforms, track);
 
 function namedMesh(group: { children: { name: string }[] }, name: string): InstancedMesh {
   const mesh = group.children.find((child) => child.name === name);
@@ -324,6 +326,56 @@ describe('grandstands', () => {
     }
 
     expect(lowest).toBeGreaterThan(WALL_HEIGHT);
+  });
+});
+
+/**
+ * The trees planted on the platforms the towers stand on.
+ *
+ * The slabs are laid at the waterline and the circuit runs over them, so a
+ * platform is *allowed* under the road — but a nine-metre tree on top of one is
+ * not, and the closest planting spot on this circuit had eleven metres of
+ * headroom against a tree that can reach eleven and a half.
+ */
+describe('platform trees', () => {
+  const planted = readBoxes(namedMesh(trees.group, 'platform-trees'));
+
+  it('plants a few hundred', () => {
+    expect(planted.length).toBeGreaterThan(150);
+  });
+
+  it('stands every one of them on a platform, clear of the buildings', () => {
+    for (const tree of planted) {
+      // Platforms can overlap in plan, so the one a tree belongs to is the one
+      // it is standing *on* — matched by deck height, not just by footprint.
+      const platform = skyline.platforms.find(
+        (deck) =>
+          Math.abs(deck.topY - tree.base) < 0.001 &&
+          Math.abs(tree.centre.x - deck.centreX) <= deck.width * 0.5 &&
+          Math.abs(tree.centre.z - deck.centreZ) <= deck.depth * 0.5,
+      );
+      expect(
+        platform,
+        `tree at ${tree.centre.x.toFixed(0)},${tree.centre.z.toFixed(0)} is on nothing`,
+      ).toBeDefined();
+
+      for (const building of platform!.occupied) {
+        const gap = Math.hypot(tree.centre.x - building.x, tree.centre.z - building.z);
+        expect(gap).toBeGreaterThan(building.radius);
+      }
+    }
+  });
+
+  it('never grows one up through the circuit', () => {
+    for (const tree of planted) {
+      const at = track.collision.query(tree.centre);
+      const half = track.frameAt(at.s).width * 0.5;
+      // Only the ones actually beneath the road have anything to clear.
+      if (Math.abs(at.lateral) > half + 4) continue;
+      // `height` is signed from the road surface, so under it reads negative.
+      const crown = tree.top - tree.base;
+      expect(-at.height, `crown ${crown.toFixed(1)} m`).toBeGreaterThan(crown);
+    }
   });
 });
 

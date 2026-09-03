@@ -132,6 +132,23 @@ const _dummy = new Object3D();
 const _position = new Vector3();
 
 /** One placed building, kept so platforms and bridges can be fitted afterwards. */
+/**
+ * A concrete deck standing out of the water, and what is already on it.
+ *
+ * Handed out so scenery can be put on the slabs without recomputing where they
+ * are. Axis-aligned, because that is how they are built.
+ */
+export interface Platform {
+  centreX: number;
+  centreZ: number;
+  width: number;
+  depth: number;
+  /** The walking surface, which is the top of the slab. */
+  topY: number;
+  /** Footprints already standing on it, as circles. */
+  occupied: readonly { x: number; z: number; radius: number }[];
+}
+
 /** A circle on the water that a building has to stay out of. */
 export interface Footprint {
   position: Vector3;
@@ -183,6 +200,8 @@ interface RoadSample {
  */
 export class Skyline {
   readonly group = new Group();
+  /** The decks the clusters stand on, for anything that wants to dress them. */
+  readonly platforms: readonly Platform[];
   private readonly mesh: InstancedMesh;
   private readonly decks: InstancedMesh;
   private readonly storeys: InstancedBufferAttribute;
@@ -218,6 +237,7 @@ export class Skyline {
     const road = Skyline.sampleRoad(track);
     const lanes = skyHighwayLanes(track);
     const blocks: Block[] = [];
+    const platforms: Platform[] = [];
     let count = 0;
     let deckCount = 0;
     const colour = new Color();
@@ -232,7 +252,9 @@ export class Skyline {
         // A platform is wider than the buildings that sit on it, so a cluster
         // that cleared the circuit individually could still have its deck laid
         // across the road. Checked here rather than at placement.
-        if (Skyline.writePlatform(this.decks, deckCount, pending, pendingDeck, road)) {
+        const platform = Skyline.writePlatform(this.decks, deckCount, pending, pendingDeck, road);
+        if (platform) {
+          platforms.push(platform);
           deckCount++;
         } else {
           // No deck, so the cluster cannot stand on one. Re-seat each building
@@ -352,6 +374,7 @@ export class Skyline {
     this.decks.count = deckCount;
     this.decks.instanceMatrix.needsUpdate = true;
 
+    this.platforms = platforms;
     this.group.add(this.mesh, this.decks);
   }
 
@@ -549,7 +572,7 @@ export class Skyline {
   /**
    * A shared concrete deck under a cluster, standing out of the water.
    *
-   * Returns false if the slab would cross the circuit, in which case the
+   * Returns null if the slab would cross the circuit, in which case the
    * cluster simply stands in the water instead.
    */
   private static writePlatform(
@@ -558,7 +581,7 @@ export class Skyline {
     group: readonly Block[],
     deckY: number,
     road: readonly RoadSample[],
-  ): boolean {
+  ): Platform | null {
     let minX = Infinity;
     let maxX = -Infinity;
     let minZ = Infinity;
@@ -583,7 +606,7 @@ export class Skyline {
       if (Math.abs(sample.y - deckY) > VERTICAL_CLEARANCE) continue;
       const dx = Math.max(0, Math.abs(sample.x - centreX) - width / 2);
       const dz = Math.max(0, Math.abs(sample.z - centreZ) - depth / 2);
-      if (Math.hypot(dx, dz) < sample.keepOut) return false;
+      if (Math.hypot(dx, dz) < sample.keepOut) return null;
     }
 
     _dummy.position.set(centreX, SEA_LEVEL - 4 + thickness / 2, centreZ);
@@ -591,7 +614,19 @@ export class Skyline {
     _dummy.scale.set(width, thickness, depth);
     _dummy.updateMatrix();
     decks.setMatrixAt(index, _dummy.matrix);
-    return true;
+
+    return {
+      centreX,
+      centreZ,
+      width,
+      depth,
+      topY: deckY,
+      occupied: group.map((block) => ({
+        x: block.position.x,
+        z: block.position.z,
+        radius: block.radius,
+      })),
+    };
   }
 
   /**
