@@ -261,8 +261,8 @@ export class RaceStage {
     this.hud.update(this.race, uiDt);
   }
 
-  resize(width: number, height: number, pixelRatio: number): void {
-    this.hud.resize(width, height, pixelRatio);
+  resize(width: number, height: number, pixelRatio: number, uiScale = 1): void {
+    this.hud.resize(width, height, pixelRatio, uiScale);
   }
 
   dispose(): void {

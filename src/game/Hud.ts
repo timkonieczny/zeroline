@@ -130,6 +130,7 @@ export class Hud {
   private readonly effects: EffectBars;
   /** The thumb controls, on a phone. Null everywhere else. */
   private readonly touchPads: TouchPads | null;
+  private uiScale = 1;
   /** Fades the racing readouts down while the classification is up. */
   private raceChrome = 1;
   /** Fades the skip hint with the shots it belongs to. */
@@ -333,7 +334,14 @@ export class Hud {
   }
 
   /** Sizes the overlay to the viewport, in CSS pixels. */
-  resize(width: number, height: number, pixelRatio: number): void {
+  /**
+   * @param uiScale CSS pixels per logical pixel. 1 on a desktop, and well under
+   *   it on a phone, which is handed a bigger logical viewport so the layout it
+   *   was authored for still fits. Only the touch hit boxes care: they are the
+   *   one thing here measured against a pointer event rather than drawn.
+   */
+  resize(width: number, height: number, pixelRatio: number, uiScale = 1): void {
+    this.uiScale = uiScale;
     this.width = width;
     this.height = height;
     this.camera.left = 0;
@@ -412,7 +420,7 @@ export class Hud {
     this.weaponHint.position.set(0, -2, 0);
 
     this.effects.layout(height);
-    this.touchPads?.layout(width, height, safeAreaInsets());
+    this.touchPads?.layout(width, height, safeAreaInsets(), this.uiScale);
     this.centreMessage.position.set(width / 2, height * 0.56, 0);
     this.skipHint.position.set(width - MARGIN, MARGIN, 0);
 

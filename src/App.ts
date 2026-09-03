@@ -276,7 +276,7 @@ export class App {
     const logicalRatio = Math.min(2.5, ratio * scale);
 
     this.menu.resize(width / scale, height / scale, logicalRatio);
-    this.race?.resize(width / scale, height / scale, logicalRatio);
+    this.race?.resize(width / scale, height / scale, logicalRatio, scale);
     this.uiScale = scale;
 
     // The resolution row's choices are the window's own sizes, so they are

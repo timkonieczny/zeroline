@@ -49,6 +49,91 @@ function scalar(value: number) {
 }
 type Scalar = ReturnType<typeof scalar>;
 
+/** Where one control goes, and where a finger has to land to press it. */
+export interface PadPlacement {
+  id: TouchControlId;
+  /** Centre, in the overlay's logical pixels with the origin bottom left. */
+  x: number;
+  y: number;
+  radius: number;
+  /** Hit box, in CSS pixels with the origin top left — a pointer event's units. */
+  region: TouchRegion;
+}
+
+/**
+ * Where the five controls sit, given a viewport.
+ *
+ * Pure arithmetic over four numbers, so it can be checked without a GPU — and
+ * it is worth checking, because the two coordinate systems it spans have now
+ * been confused twice. The overlay is drawn in logical pixels, of which a phone
+ * gets more than it has real ones so the layout it was authored for still fits;
+ * a pointer event arrives in CSS pixels, counted from the top. Leave a hit box
+ * in the first and it is not merely offset from its picture, it is a different
+ * size: the right airbrake's box began 1320 pixels across an 864-pixel screen,
+ * which is to say it did not exist.
+ */
+export function placeTouchControls(
+  width: number,
+  height: number,
+  insets: SafeAreaInsets,
+  scale: number,
+): PadPlacement[] {
+  // The insets are what the hardware covers, in CSS pixels, so they have to be
+  // converted before they mean anything among logical ones.
+  const left = insets.left / scale + CONTROL_GAP;
+  const right = width - insets.right / scale - CONTROL_GAP;
+  const bottom = insets.bottom / scale + CONTROL_GAP;
+  const top = height - insets.top / scale - CONTROL_GAP;
+
+  /** A box given in logical pixels from the bottom, as CSS ones from the top. */
+  const region = (
+    id: TouchControlId,
+    x: number,
+    y: number,
+    boxWidth: number,
+    boxHeight: number,
+  ): TouchRegion => ({
+    id,
+    x: x * scale,
+    y: (height - y - boxHeight) * scale,
+    width: boxWidth * scale,
+    height: boxHeight * scale,
+  });
+
+  /** A control whose hit box is the circle it is drawn as. */
+  const disc = (id: TouchControlId, x: number, y: number, radius: number): PadPlacement => ({
+    id,
+    x,
+    y,
+    radius,
+    region: region(id, x - radius, y - radius, radius * 2, radius * 2),
+  });
+
+  const padY = bottom + PAD_RADIUS;
+  const pads: PadPlacement[] = [
+    disc('brakeLeft', left + PAD_RADIUS, padY, PAD_RADIUS),
+    disc('brakeRight', right - PAD_RADIUS, padY, PAD_RADIUS),
+    disc('absorb', left + BUTTON_RADIUS, top - BUTTON_RADIUS, BUTTON_RADIUS),
+    disc('fire', right - BUTTON_RADIUS, top - BUTTON_RADIUS, BUTTON_RADIUS),
+    disc('pause', width / 2, top - PAUSE_HALF, PAUSE_HALF),
+  ];
+
+  // The pads' live area is the corner they sit in, not the circle drawn in it:
+  // a thumb arrives at the corner. It stops short of the screen edge, where the
+  // system's own back-swipe and home indicator live.
+  const corner = PAD_RADIUS * 2.2;
+  pads[0]!.region = region('brakeLeft', insets.left / scale + EDGE_GUARD, bottom - CONTROL_GAP, PAD_RADIUS * 2.4, corner);
+  pads[1]!.region = region(
+    'brakeRight',
+    width - insets.right / scale - EDGE_GUARD - PAD_RADIUS * 2.4,
+    bottom - CONTROL_GAP,
+    PAD_RADIUS * 2.4,
+    corner,
+  );
+
+  return pads;
+}
+
 interface Pad {
   id: TouchControlId;
   group: Group;
@@ -80,7 +165,6 @@ export class TouchPads {
 
   private readonly pads: Pad[] = [];
   private readonly regionList: TouchRegion[] = [];
-  private height = 1;
 
   constructor(pixelRatio: number) {
     this.group.name = 'touch-pads';
@@ -115,35 +199,18 @@ export class TouchPads {
    * One pass for the picture and the region together, because the day they are
    * computed twice is the day a button stops being where it looks.
    */
-  layout(width: number, height: number, insets: SafeAreaInsets): void {
-    this.height = height;
+  layout(width: number, height: number, insets: SafeAreaInsets, scale: number): void {
+    for (const placement of placeTouchControls(width, height, insets, scale)) {
+      const pad = this.pads.find((candidate) => candidate.id === placement.id);
+      if (!pad) continue;
 
-    const left = insets.left + CONTROL_GAP;
-    const right = width - insets.right - CONTROL_GAP;
-    const bottom = insets.bottom + CONTROL_GAP;
-    const top = height - insets.top - CONTROL_GAP;
+      pad.group.position.set(placement.x, placement.y, 0);
+      // The label sits under the glyph rather than across it.
+      const text = pad.group.children.find((child) => child instanceof TextMesh);
+      if (text) text.position.set(0, -placement.radius - 13, 0);
 
-    this.place('brakeLeft', left + PAD_RADIUS, bottom + PAD_RADIUS, PAD_RADIUS);
-    this.place('brakeRight', right - PAD_RADIUS, bottom + PAD_RADIUS, PAD_RADIUS);
-    this.place('absorb', left + BUTTON_RADIUS, top - BUTTON_RADIUS, BUTTON_RADIUS);
-    this.place('fire', right - BUTTON_RADIUS, top - BUTTON_RADIUS, BUTTON_RADIUS);
-    this.place('pause', width / 2, top - PAUSE_HALF, PAUSE_HALF);
-
-    // The pads' live area is the corner they sit in, not the circle drawn in
-    // it: a thumb arrives at the corner. It stops short of the screen edge,
-    // where the system's own gestures live.
-    this.widen('brakeLeft', {
-      x: insets.left + EDGE_GUARD,
-      y: height - (bottom + PAD_RADIUS * 2.2),
-      width: PAD_RADIUS * 2.4,
-      height: PAD_RADIUS * 2.2 - EDGE_GUARD,
-    });
-    this.widen('brakeRight', {
-      x: width - insets.right - EDGE_GUARD - PAD_RADIUS * 2.4,
-      y: height - (bottom + PAD_RADIUS * 2.2),
-      width: PAD_RADIUS * 2.4,
-      height: PAD_RADIUS * 2.2 - EDGE_GUARD,
-    });
+      Object.assign(pad.region, placement.region);
+    }
   }
 
   /** Fades the whole set, so it is absent under the classification and the intro. */
@@ -209,31 +276,6 @@ export class TouchPads {
       alpha,
       region: { id: 'pause', x: 0, y: 0, width: 0, height: 0 },
     };
-  }
-
-  private place(id: TouchControlId, x: number, y: number, radius: number): void {
-    const pad = this.pads.find((candidate) => candidate.id === id);
-    if (!pad) return;
-
-    pad.group.position.set(x, y, 0);
-    // The label sits under the glyph rather than across it.
-    const text = pad.group.children.find((child) => child instanceof TextMesh);
-    if (text) text.position.set(0, -radius - 13, 0);
-
-    // Screen pixels run down; the overlay's run up.
-    pad.region.x = x - radius;
-    pad.region.y = this.height - y - radius;
-    pad.region.width = radius * 2;
-    pad.region.height = radius * 2;
-  }
-
-  private widen(id: TouchControlId, box: { x: number; y: number; width: number; height: number }): void {
-    const pad = this.pads.find((candidate) => candidate.id === id);
-    if (!pad) return;
-    pad.region.x = box.x;
-    pad.region.y = box.y;
-    pad.region.width = box.width;
-    pad.region.height = box.height;
   }
 
   /** A flat wash with an opacity somebody else drives. */
