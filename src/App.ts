@@ -190,6 +190,26 @@ export class App {
     saveSettings(this.settings);
   }
 
+  /**
+   * The window as the overlays are laid out in, from the window as it is.
+   *
+   * Every stage has to be sized from this one set of numbers. A stage sized
+   * from the window's own pixels lays itself out in a coordinate system that
+   * `onTouchTap` does not convert taps into, and a HUD whose touch boxes are
+   * built against the wrong scale is a set of buttons that are not where they
+   * are drawn.
+   */
+  private static logicalViewport(
+    width: number,
+    height: number,
+    ratio: number,
+  ): { width: number; height: number; ratio: number; scale: number } {
+    const scale = uiScale(width, height);
+    // Rasterising at `ratio * scale` keeps every glyph exactly as sharp as it
+    // was: a label covering fewer real pixels is drawn into fewer real pixels.
+    return { width: width / scale, height: height / scale, ratio: Math.min(2.5, ratio * scale), scale };
+  }
+
   private pixelRatio(): number {
     // Text is rasterised at device pixels, capped so a 3x phone-class display
     // does not quietly allocate nine times the canvas area for a label.
@@ -269,15 +289,12 @@ export class App {
 
     // The interface is authored against a desktop window and a phone is not
     // one, so it is handed *more logical pixels* rather than being squeezed:
-    // the layout is unchanged and the camera covers more of it. Rasterising at
-    // `ratio * scale` keeps every glyph exactly as sharp as it was, since a
-    // label covering fewer real pixels is drawn into fewer real pixels.
-    const scale = uiScale(width, height);
-    const logicalRatio = Math.min(2.5, ratio * scale);
+    // the layout is unchanged and the camera covers more of it.
+    const view = App.logicalViewport(width, height, ratio);
 
-    this.menu.resize(width / scale, height / scale, logicalRatio);
-    this.race?.resize(width / scale, height / scale, logicalRatio, scale);
-    this.uiScale = scale;
+    this.menu.resize(view.width, view.height, view.ratio);
+    this.race?.resize(view.width, view.height, view.ratio, view.scale);
+    this.uiScale = view.scale;
 
     // The resolution row's choices are the window's own sizes, so they are
     // wrong the moment the window is not that size any more.
@@ -374,7 +391,10 @@ export class App {
     if (!this.race) {
       this.onStatus('Building circuit');
       this.race = new RaceStage(selection.track, this.renderer, setup, this.pixelRatio(), loaded);
-      this.race.resize(window.innerWidth, window.innerHeight, this.pixelRatio());
+      // `onResize` will not fire again just because a race started, so this is
+      // the layout the HUD keeps for the whole race unless the window moves.
+      const view = App.logicalViewport(window.innerWidth, window.innerHeight, this.pixelRatio());
+      this.race.resize(view.width, view.height, view.ratio, view.scale);
     } else {
       this.race.restart(setup);
     }

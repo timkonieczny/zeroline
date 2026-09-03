@@ -28,6 +28,14 @@ const CONTROL_GAP = 16;
  * drawn into the corner and stops being live before it gets there.
  */
 const EDGE_GUARD = 20;
+/**
+ * Smallest a hit box may be, in CSS pixels.
+ *
+ * The floor both platforms publish. It binds on the pause glyph and nothing
+ * else: a phone's logical pixel is well under a CSS one, so the 48-pixel box
+ * the glyph is drawn in arrives at the screen about thirty across.
+ */
+const MIN_TOUCH_TARGET = 44;
 
 /**
  * How far into the frame each corner's controls reach, in pixels.
@@ -92,13 +100,19 @@ export function placeTouchControls(
     y: number,
     boxWidth: number,
     boxHeight: number,
-  ): TouchRegion => ({
-    id,
-    x: x * scale,
-    y: (height - y - boxHeight) * scale,
-    width: boxWidth * scale,
-    height: boxHeight * scale,
-  });
+  ): TouchRegion => {
+    const hitWidth = Math.max(boxWidth * scale, MIN_TOUCH_TARGET);
+    const hitHeight = Math.max(boxHeight * scale, MIN_TOUCH_TARGET);
+    // Any growth is about the box's own centre, so a control that has to be
+    // padded up to the minimum is still centred on the thing it is drawn as.
+    return {
+      id,
+      x: x * scale - (hitWidth - boxWidth * scale) / 2,
+      y: (height - y - boxHeight) * scale - (hitHeight - boxHeight * scale) / 2,
+      width: hitWidth,
+      height: hitHeight,
+    };
+  };
 
   /** A control whose hit box is the circle it is drawn as. */
   const disc = (id: TouchControlId, x: number, y: number, radius: number): PadPlacement => ({
@@ -119,16 +133,25 @@ export function placeTouchControls(
   ];
 
   // The pads' live area is the corner they sit in, not the circle drawn in it:
-  // a thumb arrives at the corner. It stops short of the screen edge, where the
-  // system's own back-swipe and home indicator live.
-  const corner = PAD_RADIUS * 2.2;
-  pads[0]!.region = region('brakeLeft', insets.left / scale + EDGE_GUARD, bottom - CONTROL_GAP, PAD_RADIUS * 2.4, corner);
+  // a thumb arrives at the corner. It runs up to the top of the drawn pad, and
+  // stops a guard short of the screen edge on the two sides where the system's
+  // own back-swipe and home indicator live.
+  const cornerWidth = PAD_RADIUS * 2.4;
+  const cornerBottom = insets.bottom / scale + EDGE_GUARD;
+  const cornerHeight = padY + PAD_RADIUS - cornerBottom;
+  pads[0]!.region = region(
+    'brakeLeft',
+    insets.left / scale + EDGE_GUARD,
+    cornerBottom,
+    cornerWidth,
+    cornerHeight,
+  );
   pads[1]!.region = region(
     'brakeRight',
-    width - insets.right / scale - EDGE_GUARD - PAD_RADIUS * 2.4,
-    bottom - CONTROL_GAP,
-    PAD_RADIUS * 2.4,
-    corner,
+    width - insets.right / scale - EDGE_GUARD - cornerWidth,
+    cornerBottom,
+    cornerWidth,
+    cornerHeight,
   );
 
   return pads;

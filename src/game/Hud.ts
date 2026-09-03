@@ -333,8 +333,9 @@ export class Hud {
     this.plane.position.set(this.width / 2 + this.sway.x, this.height / 2 + this.sway.y, 0);
   }
 
-  /** Sizes the overlay to the viewport, in CSS pixels. */
   /**
+   * Sizes the overlay to the viewport, in the logical pixels it is drawn in.
+   *
    * @param uiScale CSS pixels per logical pixel. 1 on a desktop, and well under
    *   it on a phone, which is handed a bigger logical viewport so the layout it
    *   was authored for still fits. Only the touch hit boxes care: they are the

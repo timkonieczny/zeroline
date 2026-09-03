@@ -6,7 +6,8 @@ const NO_INSETS: SafeAreaInsets = { top: 0, right: 0, bottom: 0, left: 0 };
 
 /** A Pixel 8 held sideways, and the logical viewport the overlay gets for it. */
 const PHONE = { width: 864, height: 327 };
-const PHONE_SCALE = Math.min(1, PHONE.width / 1120, PHONE.height / 560);
+/** `App.uiScale`, floor and all — below 0.62 the type stops being readable. */
+const PHONE_SCALE = Math.max(0.62, Math.min(1, PHONE.width / 1120, PHONE.height / 560));
 const LOGICAL = { width: PHONE.width / PHONE_SCALE, height: PHONE.height / PHONE_SCALE };
 
 function place(insets = NO_INSETS): Map<string, PadPlacement> {
@@ -72,6 +73,26 @@ describe('touch control placement', () => {
     expect(left.x).toBeGreaterThan(0);
     expect(right.x + right.width).toBeLessThan(PHONE.width);
     expect(left.y + left.height).toBeGreaterThan(PHONE.height * 0.5);
+  });
+
+  it('gives every control at least the minimum touch target', () => {
+    // A logical pixel is well under a CSS one here, so a box that is generous
+    // where it is drawn can still arrive at the glass too small to hit.
+    for (const pad of place().values()) {
+      expect(pad.region.width, `${pad.id} width`).toBeGreaterThanOrEqual(44);
+      expect(pad.region.height, `${pad.id} height`).toBeGreaterThanOrEqual(44);
+    }
+  });
+
+  it('leaves the airbrakes live to the top of the pad and short of the edge', () => {
+    for (const id of ['brakeLeft', 'brakeRight'] as const) {
+      const pad = place().get(id)!;
+      // The whole drawn circle presses, top included.
+      const top = { x: pad.x * PHONE_SCALE, y: (LOGICAL.height - pad.y - pad.radius) * PHONE_SCALE };
+      expect(contains(pad, top), `${id} top`).toBe(true);
+      // And the very bottom corner does not, because the system wants it.
+      expect(pad.region.y + pad.region.height, `${id} bottom`).toBeLessThan(PHONE.height);
+    }
   });
 
   it('moves the controls in out of a notch', () => {
