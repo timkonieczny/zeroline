@@ -42,6 +42,74 @@ const KERB_RISE = 0.14;
 /** Metres of arc length per V texture unit on the road. */
 const ROAD_V_SCALE = 12;
 
+/**
+ * Metres of concrete left along each edge where the road is glazed.
+ *
+ * The glass is an inset panel, not a replacement surface: the kerb, the strip
+ * of road it is bolted to and the barrier above it all stay concrete, so the
+ * circuit still has an edge to read the racing line against.
+ */
+export const GLASS_MARGIN = 4.4;
+/**
+ * How close to the water a section has to run before it is worth glazing.
+ *
+ * The circuit stands over open sea and spends most of a lap far enough above
+ * it that a hole in the road would show nothing but haze. This is the run down
+ * to the tunnel, which is the only stretch low enough for the swell to read.
+ */
+const GLASS_MAX_HEIGHT = 18;
+/** Metres of glass in one panel, and metres of road between panels. */
+const GLASS_PANEL = 46;
+const GLASS_GAP = 155;
+/** At most this many, because the point is the surprise rather than the floor. */
+const GLASS_PANELS = 4;
+/** Metres of road either side of a tunnel mouth that stay solid. */
+const GLASS_TUNNEL_MARGIN = 70;
+
+/** A stretch of road glazed so the sea shows through it. */
+export interface GlassSpan {
+  fromS: number;
+  toS: number;
+}
+
+/**
+ * Where the road is glazed.
+ *
+ * Shared rather than computed twice: `buildRoad` cuts the hole and
+ * `scenery/TunnelGlass` fills it, and the day those two disagree is the day
+ * there is a gap in the circuit somebody drives through.
+ */
+export function glassSpans(track: Track): GlassSpan[] {
+  const spans: GlassSpan[] = [];
+  const seaLevel = -26;
+  let nextAt = -Infinity;
+
+  for (let s = 0; s + GLASS_PANEL < track.length && spans.length < GLASS_PANELS; s += 8) {
+    if (s < nextAt) continue;
+
+    // Low for its whole length, clear of both tunnel mouths, and inside no
+    // tunnel: a tunnel has a pane of its own a metre lower down.
+    let usable = true;
+    for (let at = s - GLASS_TUNNEL_MARGIN; at <= s + GLASS_PANEL + GLASS_TUNNEL_MARGIN; at += 8) {
+      const clamped = wrap(at, track.length);
+      if (track.isInTunnel(clamped)) {
+        usable = false;
+        break;
+      }
+      if (at < s || at > s + GLASS_PANEL) continue;
+      if (track.frameAt(clamped).position.y - seaLevel > GLASS_MAX_HEIGHT) {
+        usable = false;
+        break;
+      }
+    }
+    if (!usable) continue;
+
+    spans.push({ fromS: s, toS: s + GLASS_PANEL });
+    nextAt = s + GLASS_PANEL + GLASS_GAP;
+  }
+  return spans;
+}
+
 /** The circuit's sweeps, before any of them has a material. */
 export interface TrackGeometry {
   road: BufferGeometry;
@@ -79,7 +147,45 @@ function buildRoad(track: Track): BufferGeometry {
     { anchor: 'centre', offset: 0, up: 0, u: 0 },
     { anchor: 'right', offset: KERB_WIDTH, up: 0, u: 1 },
   ];
-  return buildRibbon(track, { profile, step: 2, vScale: ROAD_V_SCALE, colourByDistrict: true });
+
+  const spans = glassSpans(track);
+  if (spans.length === 0) {
+    return buildRibbon(track, { profile, step: 2, vScale: ROAD_V_SCALE, colourByDistrict: true });
+  }
+
+  // Glazed: the surface becomes a run of open ribbons instead of one closed
+  // one. Full width between the panels, and two margin strips with the middle
+  // quad skipped across them — which is the hole the glass sits in.
+  const margins: ProfilePoint[] = [
+    { anchor: 'left', offset: KERB_WIDTH, up: 0, u: -1 },
+    { anchor: 'left', offset: KERB_WIDTH + GLASS_MARGIN, up: 0, u: -0.4 },
+    { anchor: 'right', offset: KERB_WIDTH + GLASS_MARGIN, up: 0, u: 0.4 },
+    { anchor: 'right', offset: KERB_WIDTH, up: 0, u: 1 },
+  ];
+
+  const pieces: BufferGeometry[] = [];
+  for (let i = 0; i < spans.length; i++) {
+    const span = spans[i]!;
+    const next = spans[(i + 1) % spans.length]!;
+    pieces.push(
+      buildRibbon(track, {
+        profile: margins,
+        step: 2,
+        vScale: ROAD_V_SCALE,
+        colourByDistrict: true,
+        skipQuads: [1],
+        range: { fromS: span.fromS, toS: span.toS },
+      }),
+      buildRibbon(track, {
+        profile,
+        step: 2,
+        vScale: ROAD_V_SCALE,
+        colourByDistrict: true,
+        range: { fromS: span.toS, toS: next.fromS },
+      }),
+    );
+  }
+  return mergeGeometries(pieces, false)!;
 }
 
 function buildKerbs(track: Track): BufferGeometry {

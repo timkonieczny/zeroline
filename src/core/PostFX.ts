@@ -1,6 +1,6 @@
 import type { Camera, Scene } from 'three';
 import {
-  ACESFilmicToneMapping,
+  NeutralToneMapping,
   NoToneMapping,
   PostProcessing,
   SRGBColorSpace,
@@ -106,13 +106,20 @@ const LUMA = [0.2126, 0.7152, 0.0722] as const;
 /**
  * How far a fully neutral pixel is pushed away from grey.
  *
- * ACES is doing its job — it rolls saturated highlights off toward white, which
- * is what keeps a sunlit circuit from tearing — but on a set that is already
- * white concrete under a white sky it takes the last of the colour out with it,
- * and the result reads as a grey day rather than high summer. This puts it
- * back after the tone map, where a grade belongs.
+ * The tone map is Khronos PBR Neutral rather than ACES, and that is the larger
+ * half of this. ACES rolls saturated highlights toward white — the right
+ * instinct for film, and it is what keeps a sunlit circuit from tearing — but
+ * on a set that is white concrete under a white sky it takes the last of the
+ * colour with it, and the result reads as an overcast afternoon. Neutral holds
+ * hue and saturation through the roll-off instead, which is what it was built
+ * for. Bloom, the exposure and the glare all run before it in linear HDR, so
+ * none of them had to be retuned.
+ *
+ * The grade on top can only amplify what is already there — a third more of
+ * almost nothing is still almost nothing, which is why raising this alone did
+ * not do it.
  */
-const VIBRANCE = 1.34;
+const VIBRANCE = 1.5;
 /**
  * How quickly the lift falls away as a pixel is already coloured.
  *
@@ -121,7 +128,7 @@ const VIBRANCE = 1.34;
  * primary; this leaves them where they were authored and spends its effect on
  * the concrete, the sea and the sky instead.
  */
-const VIBRANCE_KNEE = 3.2;
+const VIBRANCE_KNEE = 2.4;
 
 /**
  * What the exposure climbs to inside a tunnel.
@@ -440,7 +447,7 @@ export class PostFX {
       const overlayPass = pass(overlay.scene, overlay.camera);
       const hudColour = overlayPass.getTextureNode('output');
 
-      const toned = asColour(renderOutput(node, ACESFilmicToneMapping, SRGBColorSpace));
+      const toned = asColour(renderOutput(node, NeutralToneMapping, SRGBColorSpace));
       const scene = PostFX.vibrance(toned);
       const hud = asColour(renderOutput(hudColour, NoToneMapping, SRGBColorSpace));
       node = asColour(mix(scene, hud, hudColour.a));

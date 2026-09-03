@@ -90,11 +90,13 @@ tests/       Vitest suites for the simulation
   gravity points into the road rather than at the world floor, so banking and loops need no
   special cases.
 - **`core/PostFX.ts`** — one MRT scene pass, then TRAA, motion blur, speed streaks, bloom and
-  chromatic aberration as a TSL graph. It ends on a vibrance grade over the tone-mapped scene
-  only: ACES rolls saturated highlights toward white, which is what stops a sunlit circuit
-  tearing, but on white concrete under a white sky it takes the last of the colour with it. The
-  lift falls off with how coloured a pixel already is, so the concrete and the sea gain and the
-  accent cyan is left where it was authored. Bloom threshold sits above 1.0 because the pass is linear
+  chromatic aberration as a TSL graph. The tone map is **Khronos PBR Neutral, not ACES** — ACES
+  rolls saturated highlights toward white, the right instinct for film and what stops a sunlit
+  circuit tearing, but on white concrete under a white sky it takes the last of the colour with
+  it and the circuit reads as an overcast afternoon. A vibrance grade sits on top, but it can
+  only amplify what is there: raising it alone did nothing, because a third more of almost
+  nothing is still almost nothing. Bloom, the exposure and the tunnel glare all run before the
+  tone map in linear HDR, so none of them needed retuning when it changed. Bloom threshold sits above 1.0 because the pass is linear
   HDR and sunlit concrete is already brighter than that.
 - **`core/Renderer.ts`** — renders at the display's real pixel density (`devicePixelRatio`), with
   a `matchMedia` listener for the window moving between monitors. Dynamic resolution is a
@@ -116,13 +118,21 @@ tests/       Vitest suites for the simulation
   not the 60% it asks for: a quarter of the lap has nothing between it and the sun and another
   quarter is capped by the traffic lane overhead. Lifting `SHADOW_MAX_GAIN` past 320 m buys
   under a point and then nothing at all — check with the report before assuming otherwise.
+- **`track/TrackGeometry.ts` — `glassSpans`** — four short stretches of the run down to the
+  tunnel, where the circuit is low enough over the water to be worth opening up. `buildRoad`
+  cuts the hole (the surface becomes ranged ribbons rather than one closed one, with a concrete
+  margin left along each edge) and `scenery/TunnelGlass` fills it with the same pane it uses
+  under a tunnel. Both read the same function, because the day they disagree is the day there
+  is a gap in the circuit somebody drives through.
 - **`track/scenery/Grandstands.ts`** — stands on the straights and a facing pair at the grid,
   with about 3000 spectators in one instanced draw. Dark anodised steel, the one built thing on
   the circuit that is not white: a stand in the same precast as the city behind it has no
   silhouette, and the crowd needs a dark ground to read against. Each stand is nine straight
   boxes following a road that climbs and turns, so every swept box is cut a tenth longer than
   its pitch — cut to the pitch they meet only on their centrelines and the canopy reads as a
-  flight of steps with daylight between them. The crowd is a tapered cylinder with a sphere on it; the
+  flight of steps with daylight between them. The canopy panels are then deliberately skewed
+  and staggered against each other: a shallow roof over a hundred metres is one flat rectangle
+  in almost every shot, and turning the plates gives it an edge to catch the sun on. The crowd is a tapered cylinder with a sphere on it; the
   Daft Punk read is entirely the helmet, which is metal above a local-Y line with a dark band
   smoothstepped across it. Cheering is `sin(time·rate + phase)` in the vertex shader off a
   per-instance attribute, so the CPU never touches a figure after load and a full house costs

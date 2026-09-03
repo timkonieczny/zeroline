@@ -54,6 +54,21 @@ const BARRIER_HEIGHT = 2.2;
  * of steps with gaps in it. Overlapping them buries the joint inside the solid.
  */
 const SECTION_OVERLAP = 1.1;
+/**
+ * How far a canopy panel is turned off the road, in radians.
+ *
+ * The canopy is a run of separate plates set at slightly different angles
+ * rather than one long slab. That look arrived by accident — before the frame's
+ * handedness was fixed, every box stood at its own wrong angle — and it is
+ * better than the slab that replaced it: a shallow roof over a hundred metres
+ * is a single flat rectangle in almost every shot, and turning the plates
+ * against each other gives the whole structure an edge to catch the sun on.
+ */
+const PANEL_SKEW = 0.115;
+/** Metres a panel is staggered up or down against its neighbours. */
+const PANEL_STAGGER = 0.45;
+/** How much longer a canopy panel is than its pitch, so the run never gaps. */
+const PANEL_OVERLAP = 1.24;
 /** Height of the canopy above the back row, in metres. */
 const ROOF_CLEAR = 5.4;
 /** How far the canopy oversails the front row, in metres. */
@@ -384,6 +399,7 @@ export class Grandstands {
       height: number,
       length: number,
       tone: number,
+      skew = 0,
     ): void => {
       const frame = track.frameAt((s + track.length) % track.length);
       _right.copy(frame.right);
@@ -391,6 +407,9 @@ export class Grandstands {
       _back.copy(frame.tangent).negate();
       _basis.makeBasis(_right, _up, _back);
       _dummy.quaternion.setFromRotationMatrix(_basis);
+      // About the road's own up, after the basis: a panel turns in plan rather
+      // than tipping, so a skewed roof still sheds toward the track.
+      if (skew !== 0) _dummy.rotateY(skew);
       _dummy.position
         .copy(frame.position)
         .addScaledVector(frame.right, across)
@@ -420,7 +439,18 @@ export class Grandstands {
       // A debris fence along the front, a canopy over the back and the post
       // holding it up. The canopy is what makes a bank of steps a grandstand.
       place(s, side * (front - 0.35), BARRIER_HEIGHT * 0.5, 0.35, BARRIER_HEIGHT, run, FENCE);
-      place(s, side * (front + (depth - ROOF_OVERHANG) * 0.5), top + ROOF_CLEAR, depth + ROOF_OVERHANG, 0.55, run, CANOPY);
+      // Alternating, so no two neighbours agree and the run reads as plates.
+      const skew = (i % 2 === 0 ? 1 : -1) * PANEL_SKEW * (0.6 + (i % 3) * 0.2);
+      place(
+        s,
+        side * (front + (depth - ROOF_OVERHANG) * 0.5),
+        top + ROOF_CLEAR + (i % 2 === 0 ? PANEL_STAGGER : 0),
+        depth + ROOF_OVERHANG,
+        0.55,
+        section * PANEL_OVERLAP,
+        CANOPY,
+        skew,
+      );
       place(s, side * (back - 0.6), top * 0.5 + ROOF_CLEAR * 0.5, 0.6, top + ROOF_CLEAR, 0.6, FRAME);
       place(s, side * back, top * 0.5, 0.9, top + 1.2, run, RAKE);
 

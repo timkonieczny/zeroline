@@ -3,7 +3,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { MeshStandardNodeMaterial } from 'three/webgpu';
 import { attribute, float, fract, max, min, mix, normalView, positionViewDirection, smoothstep, uv, vec3 } from 'three/tsl';
 import { buildRibbon, type ProfilePoint } from '../TrackRibbon';
-import { TUNNEL_RADIUS, TUNNEL_SKIRT, TUNNEL_THICKNESS } from '../TrackGeometry';
+import { GLASS_MARGIN, TUNNEL_RADIUS, TUNNEL_SKIRT, TUNNEL_THICKNESS, glassSpans } from '../TrackGeometry';
 import type { Track } from '../Track';
 
 /**
@@ -39,6 +39,16 @@ const SEAM = 0.035;
 /** How much of a seam survives on the underside, where the bars are not. */
 const UNDERSIDE_SEAM = 0.22;
 
+/**
+ * Metres the road-level panels sit below the surface around them.
+ *
+ * Just enough that the pane's top face never fights the concrete it is set
+ * into for the depth buffer, and far too little to feel under a craft.
+ */
+const INSET = 0.02;
+/** Width of the kerb strip, repeated from the road profile it is set into. */
+const ROAD_KERB = 1.4;
+
 /** Opacity face-on and at a grazing angle. */
 const CLEAR = 0.34;
 const GRAZING = 0.82;
@@ -54,13 +64,17 @@ const GRAZING = 0.82;
  *
  * It is glass rather than more concrete because the circuit stands in the sea
  * and the one thing worth seeing under a tunnel is the water going past.
+ *
+ * The same pane also lies in the road itself on the short low stretches
+ * running down to the tunnel, where the swell is close enough under the
+ * circuit to read. `buildRoad` cuts those holes from the same `glassSpans`
+ * this fills, so the two cannot disagree about where the floor is.
  */
 export class TunnelGlass {
   readonly group = new Group();
 
   constructor(track: Track) {
     this.group.name = 'tunnel-glass';
-    if (track.tunnels.length === 0) return;
 
     const pieces: BufferGeometry[] = [];
     const half = TUNNEL_RADIUS + TUNNEL_THICKNESS;
@@ -90,6 +104,29 @@ export class TunnelGlass {
         }),
       );
     }
+
+    // The same pane, set into the road itself where the circuit runs low
+    // enough over the water to be worth opening up. `buildRoad` cuts the hole
+    // from the same spans, leaving a strip of concrete along each edge.
+    for (const span of glassSpans(track)) {
+      const edge = ROAD_KERB + GLASS_MARGIN;
+      pieces.push(
+        buildRibbon(track, {
+          profile: [
+            { anchor: 'left', offset: edge, up: -INSET, u: 0, accent: 1 },
+            { anchor: 'right', offset: edge, up: -INSET, u: 1, accent: 1 },
+            { anchor: 'right', offset: edge, up: -INSET - THICKNESS, u: 1, accent: 0 },
+            { anchor: 'left', offset: edge, up: -INSET - THICKNESS, u: 0, accent: 0 },
+            { anchor: 'left', offset: edge, up: -INSET, u: 0, accent: 1 },
+          ],
+          step: 3,
+          vScale: PANEL_LENGTH,
+          range: { fromS: span.fromS, toS: span.toS },
+        }),
+      );
+    }
+
+    if (pieces.length === 0) return;
 
     const mesh = new Mesh(mergeGeometries(pieces, false)!, TunnelGlass.material());
     mesh.name = 'tunnel-floor';
