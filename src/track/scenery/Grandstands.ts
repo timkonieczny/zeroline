@@ -46,6 +46,15 @@ const TIER_DEPTH = 1.15;
 const TIER_RISE = 0.82;
 /** Height of the debris fence in front of the first row, in metres. */
 const BARRIER_HEIGHT = 2.2;
+/**
+ * How much longer than its pitch each swept box is made.
+ *
+ * The stand is nine straight boxes following a road that climbs and turns, so
+ * boxes cut exactly to the pitch meet only at their centrelines and leave a
+ * wedge of daylight at every joint — the canopy in particular read as a flight
+ * of steps with gaps in it. Overlapping them buries the joint inside the solid.
+ */
+const SECTION_OVERLAP = 1.1;
 /** Height of the canopy above the back row, in metres. */
 const ROOF_CLEAR = 5.4;
 /** How far the canopy oversails the front row, in metres. */
@@ -66,7 +75,8 @@ const PARTS_PER_SECTION = TIERS + 7;
 const STRAIGHT_ENOUGH = 0.0026;
 /** Metres between stands, so they read as separate structures. */
 const STAND_GAP = 70;
-const MAX_STANDS = 6;
+/** Six straights' worth, plus the second one facing the grid. */
+const MAX_STANDS = 7;
 
 // --- The crowd -------------------------------------------------------------
 
@@ -77,9 +87,11 @@ const MAX_STANDS = 6;
  * cheering is a sine in the vertex shader off a per-figure phase, so a full
  * house costs exactly what an empty one does. The cap is a triangle budget
  * rather than a memory one — forty triangles a head, and a phone has to draw
- * every one of them.
+ * every one of them. It is shared out evenly, so the stands fill from the
+ * front rows back and the gods stay empty, which is where a crowd thins first
+ * anyway.
  */
-const CROWD_CAPACITY = 2600;
+const CROWD_CAPACITY = 3000;
 /** Metres between seats along a row. */
 const SEAT_PITCH = 1.25;
 /** Fraction of seats taken. Nobody fills the back rows. */
@@ -104,6 +116,13 @@ const _basis = new Matrix4();
 const _right = new Vector3();
 const _up = new Vector3();
 const _forward = new Vector3();
+const _tone = new Color();
+
+/** The stand's values, darkest last. All of them anodised steel. */
+const RAKE = 0x343a3f;
+const FENCE = 0x525a61;
+const FRAME = 0x424951;
+const CANOPY = 0x252a2e;
 
 /** A scalar uniform. Named through a call because TSL does not export the type. */
 function scalar(value: number) {
@@ -113,7 +132,7 @@ type Scalar = ReturnType<typeof scalar>;
 
 /** Where a stand stands, for the crowd noise. */
 export interface StandSite {
-  /** Centre of the structure, on the road. */
+  /** Centre of the rake, out beside the road rather than on it. */
   position: Vector3;
   /** Arc length of its midpoint, in metres. */
   s: number;
@@ -135,6 +154,8 @@ interface Run {
   /** Arc length of the first and last metre of the straight. */
   from: number;
   to: number;
+  /** Stands on both sides of the road, facing each other. The grid does. */
+  facing?: boolean;
 }
 
 /**
@@ -164,12 +185,25 @@ export class Grandstands {
 
   constructor(track: Track) {
     const rng = new Rng(0xc0ffee1);
-    const runs = Grandstands.findStraights(track);
+    // One entry per stand, so the grid's pair is two placements on one run.
+    const placements: { midS: number; side: -1 | 1 }[] = [];
+    for (const run of Grandstands.findStraights(track)) {
+      if (placements.length >= MAX_STANDS) break;
+      const midS = (run.from + run.to) * 0.5;
+      // Alternating otherwise, so the circuit never looks like it was built
+      // along one edge of itself.
+      const side: -1 | 1 = placements.length % 2 === 0 ? 1 : -1;
+      placements.push({ midS, side });
+      if (run.facing && placements.length < MAX_STANDS) {
+        placements.push({ midS, side: -side as -1 | 1 });
+      }
+    }
+
     const sites: StandSite[] = [];
 
     this.structure = new InstancedMesh(
       new BoxGeometry(1, 1, 1),
-      Grandstands.concrete(),
+      Grandstands.steel(),
       MAX_STANDS * STAND_SEGMENTS * PARTS_PER_SECTION,
     );
     this.structure.name = 'grandstands';
@@ -195,16 +229,9 @@ export class Grandstands {
     let structureCount = 0;
     let crowdCount = 0;
     const colour = new Color();
-    const share = Math.floor(CROWD_CAPACITY / Math.max(1, Math.min(runs.length, MAX_STANDS)));
+    const share = Math.floor(CROWD_CAPACITY / Math.max(1, placements.length));
 
-    for (const run of runs) {
-      if (sites.length >= MAX_STANDS) break;
-
-      const midS = (run.from + run.to) * 0.5;
-      // Alternating sides, so the circuit never looks like it was built along
-      // one edge of itself.
-      const side: -1 | 1 = sites.length % 2 === 0 ? 1 : -1;
-
+    for (const { midS, side } of placements) {
       structureCount = this.buildStand(track, midS, side, structureCount);
       crowdCount = this.seat(
         track,
@@ -217,9 +244,16 @@ export class Grandstands {
         colour,
       );
 
+      const at = (midS + track.length) % track.length;
+      const middle = track.frameAt(at);
       sites.push({
-        position: track.frameAt((midS + track.length) % track.length).position.clone(),
-        s: (midS + track.length) % track.length,
+        position: middle.position
+          .clone()
+          .addScaledVector(
+            middle.right,
+            side * (middle.width * 0.5 + STAND_SETBACK + TIER_DEPTH * TIERS * 0.5),
+          ),
+        s: at,
         side,
       });
 
@@ -239,6 +273,7 @@ export class Grandstands {
 
     this.structure.count = structureCount;
     this.structure.instanceMatrix.needsUpdate = true;
+    if (this.structure.instanceColor) this.structure.instanceColor.needsUpdate = true;
     this.crowd.count = crowdCount;
     this.crowd.instanceMatrix.needsUpdate = true;
     if (this.crowd.instanceColor) this.crowd.instanceColor.needsUpdate = true;
@@ -273,7 +308,12 @@ export class Grandstands {
   private static findStraights(track: Track): Run[] {
     const step = 6;
     const half = STAND_LENGTH * 0.5;
-    const runs: Run[] = [{ from: track.startS - half, to: track.startS + half }];
+    // The grid gets a stand on each side. It is the shot the intro camera
+    // opens on and the one the classification cuts back to, and a start line
+    // with a crowd on one side only reads as half a circuit.
+    const runs: Run[] = [
+      { from: track.startS - half, to: track.startS + half, facing: true },
+    ];
 
     let openedAt = -1;
     const close = (at: number): void => {
@@ -313,6 +353,7 @@ export class Grandstands {
   private buildStand(track: Track, midS: number, side: number, start: number): number {
     let count = start;
     const section = STAND_LENGTH / STAND_SEGMENTS;
+    const run = section * SECTION_OVERLAP;
 
     /** One box, seated in the road's frame at this station. */
     const place = (
@@ -322,6 +363,7 @@ export class Grandstands {
       width: number,
       height: number,
       length: number,
+      tone: number,
     ): void => {
       const frame = track.frameAt((s + track.length) % track.length);
       _right.copy(frame.right);
@@ -336,6 +378,7 @@ export class Grandstands {
       _dummy.scale.set(width, height, length);
       _dummy.updateMatrix();
       this.structure.setMatrixAt(count, _dummy.matrix);
+      this.structure.setColorAt(count, _tone.setHex(tone));
       count++;
     };
 
@@ -351,15 +394,15 @@ export class Grandstands {
       // enough to be the backrest of the row in front of it.
       for (let tier = 0; tier < TIERS; tier++) {
         const rise = TIER_RISE * (tier + 1);
-        place(s, side * (front + TIER_DEPTH * (tier + 0.5)), rise * 0.5 - 0.4, TIER_DEPTH, rise + 0.8, section);
+        place(s, side * (front + TIER_DEPTH * (tier + 0.5)), rise * 0.5 - 0.4, TIER_DEPTH, rise + 0.8, run, RAKE);
       }
 
       // A debris fence along the front, a canopy over the back and the post
       // holding it up. The canopy is what makes a bank of steps a grandstand.
-      place(s, side * (front - 0.35), BARRIER_HEIGHT * 0.5, 0.35, BARRIER_HEIGHT, section);
-      place(s, side * (front + (depth - ROOF_OVERHANG) * 0.5), top + ROOF_CLEAR, depth + ROOF_OVERHANG, 0.55, section);
-      place(s, side * (back - 0.6), top * 0.5 + ROOF_CLEAR * 0.5, 0.6, top + ROOF_CLEAR, 0.6);
-      place(s, side * back, top * 0.5, 0.9, top + 1.2, section);
+      place(s, side * (front - 0.35), BARRIER_HEIGHT * 0.5, 0.35, BARRIER_HEIGHT, run, FENCE);
+      place(s, side * (front + (depth - ROOF_OVERHANG) * 0.5), top + ROOF_CLEAR, depth + ROOF_OVERHANG, 0.55, run, CANOPY);
+      place(s, side * (back - 0.6), top * 0.5 + ROOF_CLEAR * 0.5, 0.6, top + ROOF_CLEAR, 0.6, FRAME);
+      place(s, side * back, top * 0.5, 0.9, top + 1.2, run, RAKE);
 
       // What holds it up. All of this is over open water, and a stand hanging
       // in the air beside a floating road doubles the problem the pillars
@@ -367,9 +410,9 @@ export class Grandstands {
       // which from the circuit's own flyover reads as a cliff. A deck on
       // columns instead: the same answer the road itself gives.
       const drop = frame.position.y - SEA_LEVEL + 6;
-      place(s, side * (front + depth * 0.5), -APRON_DEPTH * 0.5, depth, APRON_DEPTH, section);
+      place(s, side * (front + depth * 0.5), -APRON_DEPTH * 0.5, depth, APRON_DEPTH, run, CANOPY);
       for (const at of [front + COLUMN_SIDE, back - COLUMN_SIDE]) {
-        place(s, side * at, -drop * 0.5 - APRON_DEPTH, COLUMN_SIDE, drop, COLUMN_SIDE);
+        place(s, side * at, -drop * 0.5 - APRON_DEPTH, COLUMN_SIDE, drop, COLUMN_SIDE, FRAME);
       }
     }
 
@@ -496,12 +539,25 @@ export class Grandstands {
     return material;
   }
 
-  /** The stands themselves: pale precast, like everything else in this city. */
-  private static concrete(): MeshStandardNodeMaterial {
+  /**
+   * The stands: dark anodised steel, against a city that is all pale concrete.
+   *
+   * Deliberately the one built thing on the circuit that is not white. A stand
+   * in the same precast as the skyline behind it has no silhouette at all —
+   * which is the mistake the showroom already taught once — and the crowd is
+   * the thing that has to read, so it needs a dark ground to sit against.
+   * Rough enough to stay matte: a mirror-finish grandstand would fight the
+   * craft for the only specular highlights in frame.
+   *
+   * White here, with every value coming from the per-instance colour. One
+   * material and one draw call, and the canopy still reads as a plane in front
+   * of the rake instead of merging into one dark mass with it.
+   */
+  private static steel(): MeshStandardNodeMaterial {
     const material = new MeshStandardNodeMaterial();
-    material.color = new Color(0xd6d9dc);
-    material.roughness = 0.83;
-    material.metalness = 0;
+    material.color = new Color(0xffffff);
+    material.roughness = 0.42;
+    material.metalness = 0.78;
     return material;
   }
 }

@@ -613,7 +613,13 @@ export class App {
       // intro was spending it: by the time the curtain lifted, a third of the
       // first establishing shot had already been played to an empty room.
       this.race.render(
-        alpha,
+        // Pinned to the current state while the world is held. The loop keeps
+        // draining its accumulator whether or not `tick` does anything, so
+        // `alpha` goes on sweeping 0 to 1 every frame — and `previous` and
+        // `state` are still a tick apart from the moment the panel came up.
+        // Left alone, every craft and the camera behind them shimmer back and
+        // forth by a tick's worth of travel, which is about a metre at RAPIER.
+        this.paused || this.transitioning ? 1 : alpha,
         this.paused || this.transitioning ? 0 : frameTime,
         this.input.snapshot.lookBack,
         this.renderer.camera,

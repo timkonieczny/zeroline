@@ -249,7 +249,12 @@ export class RaceStage {
 
     const player = this.race.player;
     // No impact shake during a replay: the recording carries poses, not hits.
-    if (!this.replaying && player.telemetry.impact > 0) this.chase.impact(player.telemetry.impact);
+    // And none while the world is held — the telemetry is frozen, so pausing
+    // just after a hit would re-arm the same shake on every frame the panel is
+    // up and let it out all at once on resume.
+    if (!this.replaying && dt > 0 && player.telemetry.impact > 0) {
+      this.chase.impact(player.telemetry.impact);
+    }
 
     this.chase.update(camera, player, alpha, dt, lookingBack);
 

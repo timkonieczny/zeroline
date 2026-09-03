@@ -112,8 +112,13 @@ tests/       Vitest suites for the simulation
   not the 60% it asks for: a quarter of the lap has nothing between it and the sun and another
   quarter is capped by the traffic lane overhead. Lifting `SHADOW_MAX_GAIN` past 320 m buys
   under a point and then nothing at all — check with the report before assuming otherwise.
-- **`track/scenery/Grandstands.ts`** — stands on the straights and at the grid, and about 2600
-  spectators in one instanced draw. The crowd is a tapered cylinder with a sphere on it; the
+- **`track/scenery/Grandstands.ts`** — stands on the straights and a facing pair at the grid,
+  with about 3000 spectators in one instanced draw. Dark anodised steel, the one built thing on
+  the circuit that is not white: a stand in the same precast as the city behind it has no
+  silhouette, and the crowd needs a dark ground to read against. Each stand is nine straight
+  boxes following a road that climbs and turns, so every swept box is cut a tenth longer than
+  its pitch — cut to the pitch they meet only on their centrelines and the canopy reads as a
+  flight of steps with daylight between them. The crowd is a tapered cylinder with a sphere on it; the
   Daft Punk read is entirely the helmet, which is metal above a local-Y line with a dark band
   smoothstepped across it. Cheering is `sin(time·rate + phase)` in the vertex shader off a
   per-instance attribute, so the CPU never touches a figure after load and a full house costs

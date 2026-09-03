@@ -192,20 +192,21 @@ describe('skyline placement', () => {
  * nobody drives at.
  */
 describe('grandstands', () => {
-  it('puts one at the grid', () => {
-    const nearest = stands.sites.reduce((best, site) =>
-      Math.abs(site.s - track.startS) < Math.abs(best.s - track.startS) ? site : best,
-    );
-    expect(Math.abs(nearest.s - track.startS)).toBeLessThan(1);
-  });
-
   it('keeps them off each other', () => {
+    // The tight pair is the two at the grid, which face each other across the
+    // road. Everything else is a straight apart.
     for (const a of stands.sites) {
       for (const b of stands.sites) {
         if (a === b) continue;
-        expect(a.position.distanceTo(b.position)).toBeGreaterThan(60);
+        expect(a.position.distanceTo(b.position)).toBeGreaterThan(40);
       }
     }
+  });
+
+  it('faces a second stand across the grid', () => {
+    const atGrid = stands.sites.filter((site) => Math.abs(site.s - track.startS) < 1);
+    expect(atGrid).toHaveLength(2);
+    expect(atGrid[0]!.side).toBe(-atGrid[1]!.side);
   });
 
   it('alternates which side of the road they are on', () => {
