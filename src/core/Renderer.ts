@@ -16,6 +16,15 @@ export interface RendererStats {
   adapter: string;
 }
 
+/**
+ * Milliseconds after a rotation before the viewport is measured again.
+ *
+ * Long enough for the browser's own animation to have finished. Nothing fires
+ * when it does, so without this a stale measurement stands until the next
+ * unrelated resize.
+ */
+const ORIENTATION_SETTLE = 320;
+
 /** Never render below this fraction of native resolution. */
 const MIN_SCALE = 0.55;
 /** Frames the frame-time average is taken over before the scale is adjusted. */
@@ -76,7 +85,38 @@ export class Renderer {
   private dprQuery: MediaQueryList | null = null;
   private readonly onDprChange = (): void => this.watchPixelRatio();
 
-  private readonly onResize = (): void => this.applySize();
+  /**
+   * Called once the viewport has been measured and the backbuffer resized.
+   *
+   * The overlays subscribe here rather than keeping a `resize` listener of
+   * their own. Two listeners meant two independent measurements of the same
+   * event, taken at whatever instant each happened to run — and on a phone,
+   * where the reported size is briefly stale through a rotation or a URL bar
+   * sliding away, the two could disagree. A canvas sized from one measurement
+   * and drawn into from another is a frame with a hole in it.
+   */
+  onViewportChange: (() => void) | null = null;
+
+  private resizeQueued = false;
+  private readonly onResize = (): void => this.scheduleResize();
+
+  /**
+   * Coalesces a burst of resize events into one measurement, next frame.
+   *
+   * Android fires these continuously while the URL bar animates and reports
+   * dimensions that have not settled yet; a rotation fires several, the first
+   * of them often still carrying the old orientation's width. Measuring inside
+   * the frame callback rather than in the event is what makes the number the
+   * one the compositor is actually about to use.
+   */
+  private scheduleResize(): void {
+    if (this.resizeQueued) return;
+    this.resizeQueued = true;
+    requestAnimationFrame(() => {
+      this.resizeQueued = false;
+      if (this.applySize()) this.onViewportChange?.();
+    });
+  }
 
   constructor(canvas?: HTMLCanvasElement) {
     this.canvas = canvas ?? document.createElement('canvas');
@@ -129,6 +169,10 @@ export class Renderer {
     if (!this.canvas.isConnected) document.body.appendChild(this.canvas);
     this.watchPixelRatio();
     window.addEventListener('resize', this.onResize);
+    // Both, because they do not reliably imply each other: Android fires
+    // `resize` alone for the URL bar, and `orientationchange` can arrive before
+    // the viewport has caught up with it.
+    window.addEventListener('orientationchange', this.onOrientationChange);
     this.applySize();
   }
 
@@ -203,6 +247,7 @@ export class Renderer {
 
   dispose(): void {
     window.removeEventListener('resize', this.onResize);
+    window.removeEventListener('orientationchange', this.onOrientationChange);
     this.dprQuery?.removeEventListener('change', this.onDprChange);
     this.renderer.dispose();
   }
@@ -222,7 +267,20 @@ export class Renderer {
     this.applySize();
   }
 
-  private applySize(): void {
+  /**
+   * A rotation, and then a second look at it.
+   *
+   * The dimensions reported in the moment `orientationchange` fires are the old
+   * orientation's often enough to matter, and nothing fires again once they
+   * settle. The re-check costs one measurement that usually finds nothing.
+   */
+  private readonly onOrientationChange = (): void => {
+    this.scheduleResize();
+    window.setTimeout(() => this.scheduleResize(), ORIENTATION_SETTLE);
+  };
+
+  /** @returns whether anything actually moved. */
+  private applySize(): boolean {
     const width = window.innerWidth;
     const height = window.innerHeight;
     const density = this.currentDpr * this.baseScale * this.adaptiveScale;
@@ -232,7 +290,7 @@ export class Renderer {
     // the backbuffer also reallocates every render target in the post chain
     // behind it, which is far too much to do for a number that has not moved.
     if (width === this.sizedWidth && height === this.sizedHeight && density === this.sizedDensity) {
-      return;
+      return false;
     }
     this.sizedWidth = width;
     this.sizedHeight = height;
@@ -241,6 +299,7 @@ export class Renderer {
     this.renderer.setSize(width, height, true);
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
+    return true;
   }
 
   /** Turns adaptive resolution on or off, and sets the frame-time target. */

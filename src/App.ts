@@ -143,6 +143,8 @@ export class App {
   private uiScale = 1;
   /** True while the phone is the wrong way round and the card is over the game. */
   private portrait = false;
+  /** True once the frame loop owns the renderer. */
+  private running = false;
 
   constructor(private readonly onStatus: (text: string) => void) {
     this.settings = loadSettings();
@@ -209,14 +211,24 @@ export class App {
     });
 
     document.body.appendChild(this.perf);
+    // A phone has no F3. `?perf=1` is the way in, and it is worth having: the
+    // sizes on this overlay are the first thing to read when the frame has a
+    // hole in it, and asking somebody to attach a debugger to a handset is a
+    // long way round.
+    if (new URLSearchParams(window.location.search).get('perf') === '1') this.perf.hidden = false;
     this.input.attach();
     this.attachTouch();
     this.watchOrientation();
-    window.addEventListener('resize', this.onResize);
+    // Not a second `resize` listener: the renderer owns the one measurement,
+    // and calls back once it has resized the backbuffer to it. Two listeners
+    // measured the same event twice, at different instants, and could size the
+    // canvas and the overlays from different numbers.
+    this.renderer.onViewportChange = this.onResize;
     window.addEventListener('keydown', this.onKeyDown);
     this.onResize();
 
     this.renderer.setAdaptive(this.settings.adaptiveResolution, this.settings.targetFps);
+    this.running = true;
     this.loop.start();
   }
 
@@ -250,6 +262,23 @@ export class App {
     // The resolution row's choices are the window's own sizes, so they are
     // wrong the moment the window is not that size any more.
     this.refreshResolutionRow();
+
+    // And draw one frame at the new size straight away.
+    //
+    // Resizing the backbuffer clears it, and the loop's own frame for this tick
+    // may already have gone — so without this the newly exposed part of the
+    // canvas is the clear colour until the next one. On a desktop that is a
+    // frame nobody catches. On a phone, where the URL bar slides in and out
+    // while you play, it is a black rectangle that comes and goes.
+    //
+    // Only once the loop is running. The first call to this happens during
+    // `start`, where the chain has never been compiled and drawing it here
+    // would move that whole cost in front of the boot card rather than behind
+    // the first frame.
+    if (this.running && !this.portrait) {
+      if (this.mode === 'menu') this.menuPost?.render();
+      else this.racePost?.render();
+    }
   };
 
   /** Rebuilds the resolution row's choices from the window as it is now. */
@@ -590,6 +619,11 @@ export class App {
       `backend    ${stats.backend}`,
       `adapter    ${stats.adapter}`,
       `buffer     ${stats.drawingBufferWidth}x${stats.drawingBufferHeight}`,
+      // The comparison that matters when part of the frame comes out black: a
+      // canvas whose CSS box is wider than what was rendered into it shows the
+      // clear colour in the difference, and the clear colour here is black.
+      `window     ${window.innerWidth}x${window.innerHeight}`,
+      `canvas     ${this.renderer.canvas.clientWidth}x${this.renderer.canvas.clientHeight}`,
       `dpr        ${stats.devicePixelRatio.toFixed(2)}  scale ${stats.resolutionScale.toFixed(2)}`,
       `draws      ${info.render.drawCalls}   tris ${info.render.triangles.toLocaleString()}`,
       `sim ticks  ${this.loop.ticksLastFrame}`,
@@ -871,7 +905,7 @@ export class App {
     this.loop.stop();
     this.audio.dispose();
     this.input.detach();
-    window.removeEventListener('resize', this.onResize);
+    this.renderer.onViewportChange = null;
     window.removeEventListener('keydown', this.onKeyDown);
     this.menu.dispose();
     this.race?.dispose();
