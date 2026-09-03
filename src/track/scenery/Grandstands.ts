@@ -15,7 +15,6 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import {
   Fn,
   attribute,
-  cos,
   float,
   mix,
   positionLocal,
@@ -99,30 +98,43 @@ const OCCUPANCY = 0.74;
 /** Rows that get anybody in them — the top two are gangway. */
 const OCCUPIED_TIERS = TIERS - 2;
 
-/** Seated height of a figure, in metres. */
-const FIGURE_HEIGHT = 0.92;
 /** Local height above which a vertex belongs to the helmet, in metres. */
 const HELMET_LINE = 0.66;
 /** How far a figure rises out of its seat at the top of a cheer, in metres. */
-const CHEER_LIFT = 0.115;
+const CHEER_LIFT = 0.17;
 /** Cheers a second, for the most placid spectator and the most excitable. */
 const CHEER_RATE_LOW = 1.1;
 const CHEER_RATE_HIGH = 2.3;
-/** How far a figure's head leans sideways, in metres. */
-const CHEER_SWAY = 0.055;
+
 
 const _dummy = new Object3D();
 const _basis = new Matrix4();
 const _right = new Vector3();
 const _up = new Vector3();
-const _forward = new Vector3();
+/**
+ * The road's tangent, negated.
+ *
+ * A track frame's `right` is `tangent × up`, so `(right, up, tangent)` is
+ * *left*-handed and `makeBasis` on it has determinant -1. A quaternion cannot
+ * represent a reflection, so `setFromRotationMatrix` silently throws the
+ * reflection away and hands back some unrelated rotation — 25 degrees off the
+ * road at the grid here, and 92 at half distance. Negating one axis makes it
+ * right-handed, which is the same thing `Craft` does with its own `_back`.
+ */
+const _back = new Vector3();
 const _tone = new Color();
 
-/** The stand's values, darkest last. All of them anodised steel. */
+/**
+ * The stand's values. All of them anodised steel.
+ *
+ * The canopy is the lightest of the four rather than the darkest: it is the
+ * largest flat plane on the structure and the one most often seen against the
+ * sky, and near-black there turns the whole grid straight into a silhouette.
+ */
 const RAKE = 0x343a3f;
 const FENCE = 0x525a61;
 const FRAME = 0x424951;
-const CANOPY = 0x252a2e;
+const CANOPY = 0x6d777e;
 
 /** A scalar uniform. Named through a call because TSL does not export the type. */
 function scalar(value: number) {
@@ -224,6 +236,13 @@ export class Grandstands {
 
     const cheer = new InstancedBufferAttribute(new Float32Array(CROWD_CAPACITY * 2), 2);
     this.crowd.geometry.setAttribute('cheer', cheer);
+    // Clothing goes in an attribute of its own rather than through
+    // `setColorAt`. The instance colour multiplies the whole `colorNode`,
+    // helmet included, so a spectator in a red shirt got a red helmet — which
+    // with the old muted palette was invisible and with this one is the only
+    // thing you see.
+    const shirt = new InstancedBufferAttribute(new Float32Array(CROWD_CAPACITY * 3), 3);
+    this.crowd.geometry.setAttribute('shirt', shirt);
 
     const footprints: Footprint[] = [];
     let structureCount = 0;
@@ -241,6 +260,7 @@ export class Grandstands {
         Math.min(share, CROWD_CAPACITY - crowdCount),
         rng,
         cheer,
+        shirt,
         colour,
       );
 
@@ -276,8 +296,8 @@ export class Grandstands {
     if (this.structure.instanceColor) this.structure.instanceColor.needsUpdate = true;
     this.crowd.count = crowdCount;
     this.crowd.instanceMatrix.needsUpdate = true;
-    if (this.crowd.instanceColor) this.crowd.instanceColor.needsUpdate = true;
     cheer.needsUpdate = true;
+    shirt.needsUpdate = true;
 
     this.sites = sites;
     this.footprints = footprints;
@@ -368,8 +388,8 @@ export class Grandstands {
       const frame = track.frameAt((s + track.length) % track.length);
       _right.copy(frame.right);
       _up.copy(frame.up);
-      _forward.copy(frame.tangent);
-      _basis.makeBasis(_right, _up, _forward);
+      _back.copy(frame.tangent).negate();
+      _basis.makeBasis(_right, _up, _back);
       _dummy.quaternion.setFromRotationMatrix(_basis);
       _dummy.position
         .copy(frame.position)
@@ -428,6 +448,7 @@ export class Grandstands {
     budget: number,
     rng: Rng,
     cheer: InstancedBufferAttribute,
+    shirt: InstancedBufferAttribute,
     colour: Color,
   ): number {
     let count = start;
@@ -444,15 +465,17 @@ export class Grandstands {
 
         _right.copy(frame.right);
         _up.copy(frame.up);
-        _forward.copy(frame.tangent);
-        _basis.makeBasis(_right, _up, _forward);
+        _back.copy(frame.tangent).negate();
+        _basis.makeBasis(_right, _up, _back);
         _dummy.quaternion.setFromRotationMatrix(_basis);
         // Everybody faces the road, give or take a neighbour being talked to.
         _dummy.rotateY(rng.range(-0.35, 0.35));
         _dummy.position
           .copy(frame.position)
           .addScaledVector(frame.right, side * (front + TIER_DEPTH * (tier + 0.75)) + rng.range(-0.12, 0.12))
-          .addScaledVector(frame.up, TIER_RISE * (tier + 1) + 0.4);
+          // Exactly the top of their own tier box, which is at `rise`. Adding
+          // clearance here is what had the whole crowd hovering 40 cm up.
+          .addScaledVector(frame.up, TIER_RISE * (tier + 1));
         _dummy.scale.setScalar(rng.range(0.9, 1.06));
         _dummy.updateMatrix();
         this.crowd.setMatrixAt(count, _dummy.matrix);
@@ -460,10 +483,12 @@ export class Grandstands {
         // Phase and rate, so no two neighbours are ever quite in time.
         cheer.setXY(count, rng.range(0, Math.PI * 2), rng.range(CHEER_RATE_LOW, CHEER_RATE_HIGH));
 
-        // Clothing: muted, and kept off the circuit's accent hues. A stand of
-        // orange shirts reads as a row of boost pads.
-        colour.setHSL(rng.range(0.52, 0.68), rng.range(0.05, 0.3), rng.range(0.12, 0.46));
-        this.crowd.setColorAt(count, colour);
+        // A crowd is the one place on this circuit where every colour in the
+        // wheel turns up at once, and it is worth having: the city is white,
+        // the road is white, and the stands are steel. Saturated, and kept off
+        // the very light end so a figure never disappears into its own helmet.
+        colour.setHSL(rng.next(), rng.range(0.55, 0.92), rng.range(0.3, 0.56));
+        shirt.setXYZ(count, colour.r, colour.g, colour.b);
 
         count++;
       }
@@ -507,18 +532,20 @@ export class Grandstands {
   private static crowdMaterial(time: Scalar): MeshStandardNodeMaterial {
     const material = new MeshStandardNodeMaterial();
     const cheer = attribute<'vec2'>('cheer', 'vec2');
+    const shirt = attribute<'vec3'>('shirt', 'vec3');
     const helmet = step(float(HELMET_LINE), positionLocal.y);
 
     material.positionNode = Fn(() => {
+      // Straight up and straight back down, and nothing else. An added sway
+      // put every figure on its own little ellipse, and a stand of two and a
+      // half thousand people stirring in circles reads as a liquid rather than
+      // as a crowd getting to its feet.
       const beat = time.mul(cheer.y).add(cheer.x);
       const local = positionLocal.toVar();
-      // Out of the seat and back into it. Squared so the rise is quick and the
-      // settle slow, which is what a cheer looks like rather than a bounce.
+      // Squared, so the rise is quick and the settle slow — which is what a
+      // cheer looks like, rather than a bounce.
       const lift = sin(beat).mul(0.5).add(0.5).pow(2).mul(CHEER_LIFT);
-      // The sway leans the figure rather than sliding it, so helmets travel
-      // further than knees do and the stand reads as a crowd instead of a grid.
-      const lean = cos(beat.mul(0.5)).mul(CHEER_SWAY).mul(local.y.div(FIGURE_HEIGHT));
-      return vec3(local.x.add(lean), local.y.add(lift), local.z);
+      return vec3(local.x, local.y.add(lift), local.z);
     })();
 
     material.colorNode = Fn(() => {
@@ -528,9 +555,8 @@ export class Grandstands {
         smoothstep(float(0.8), float(0.78), positionLocal.y),
       );
       const shell = mix(vec3(0.78, 0.79, 0.82), vec3(0.03, 0.04, 0.05), visor);
-      // White below the helmet line, so the per-instance clothing colour is
-      // what shows through there and the helmet ignores it.
-      return mix(vec3(1, 1, 1), shell, helmet);
+      // The helmet keeps its own metal whatever the spectator is wearing.
+      return mix(shirt, shell, helmet);
     })();
 
     // Chrome above the shoulders, cloth below them.

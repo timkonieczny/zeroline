@@ -57,6 +57,7 @@ const track = new Track(meridianCoast);
 const stands = new Grandstands(track);
 // Built the way the stage builds it: the stands first, the city around them.
 const skyline = new Skyline(track, stands.footprints);
+const pillars = new TrackPillars(track);
 
 function namedMesh(group: { children: { name: string }[] }, name: string): InstancedMesh {
   const mesh = group.children.find((child) => child.name === name);
@@ -191,6 +192,72 @@ describe('skyline placement', () => {
  * road all look plausible from the cockpit and are only visible from an angle
  * nobody drives at.
  */
+/**
+ * Everything seated in a track frame is oriented through a basis matrix, and a
+ * track frame's `right` is `tangent x up` — so `(right, up, tangent)` is
+ * left-handed and `makeBasis` on it has determinant -1. A quaternion cannot
+ * represent a reflection, so `setFromRotationMatrix` discards it and hands back
+ * an unrelated rotation: the stands shipped 25 degrees off the road at the grid
+ * and 92 degrees off at half distance, with backfaces showing through.
+ *
+ * The determinant is the whole test. It cannot be seen from the cockpit on a
+ * straight, it is not an assertion any placement test would have made, and the
+ * next thing built against a frame will reach for the same three vectors.
+ */
+describe('orientation', () => {
+  it('is handed the wrong way round by a track frame', () => {
+    // The trap itself, stated once. Anybody reaching for these three vectors
+    // to seat something on the road needs to negate one of them first, and
+    // there is nothing about the names that says so.
+    const frame = track.frameAt(track.startS);
+    const asGiven = new Matrix4().makeBasis(frame.right, frame.up, frame.tangent);
+    const corrected = new Matrix4().makeBasis(
+      frame.right,
+      frame.up,
+      frame.tangent.clone().negate(),
+    );
+
+    expect(asGiven.determinant()).toBeLessThan(0);
+    expect(corrected.determinant()).toBeGreaterThan(0);
+  });
+
+  it('points every piece of scenery along the road it sits on', () => {
+    // A reflection cannot survive into a quaternion, so the determinant of the
+    // instance matrix is no help — `setFromRotationMatrix` quietly drops it and
+    // returns an unrelated rotation instead. Only the resulting *direction*
+    // shows the fault, and it showed it plainly: the stands shipped 25 degrees
+    // off the road at the grid and 92 degrees off at half distance.
+    const matrix = new Matrix4();
+    const spin = new Quaternion();
+    const along = new Vector3();
+
+    /** The closest any instance comes to running along the road at `s`. */
+    const bestAlignment = (mesh: InstancedMesh, s: number): number => {
+      const tangent = track.frameAt(s).tangent.clone();
+      let best = 0;
+      for (let i = 0; i < mesh.count; i++) {
+        mesh.getMatrixAt(i, matrix);
+        matrix.decompose(new Vector3(), spin, new Vector3());
+        along.set(0, 0, 1).applyQuaternion(spin);
+        best = Math.max(best, Math.abs(along.dot(tangent)));
+      }
+      return best;
+    };
+
+    const stand = namedMesh(stands.group, 'grandstands');
+    for (const site of stands.sites) {
+      expect(bestAlignment(stand, site.s), `stand at s=${site.s.toFixed(0)}`).toBeGreaterThan(0.99);
+    }
+
+    // The capitals are banked with the road, so they carry the same fault.
+    const capitals = namedMesh(pillars.group, 'track-pillar-capitals');
+    for (const shaft of readBoxes(namedMesh(pillars.group, 'track-pillars'))) {
+      const at = track.collision.query(shaft.centre).s;
+      expect(bestAlignment(capitals, at), `capital at s=${at.toFixed(0)}`).toBeGreaterThan(0.99);
+    }
+  });
+});
+
 describe('grandstands', () => {
   it('keeps them off each other', () => {
     // The tight pair is the two at the grid, which face each other across the
@@ -232,7 +299,7 @@ describe('grandstands', () => {
 });
 
 describe('track pillars', () => {
-  const shafts = readBoxes(namedMesh(new TrackPillars(track).group, 'track-pillars'));
+  const shafts = readBoxes(namedMesh(pillars.group, 'track-pillars'));
 
   it('puts up a few, not a viaduct', () => {
     expect(shafts.length).toBeGreaterThan(2);

@@ -90,7 +90,11 @@ tests/       Vitest suites for the simulation
   gravity points into the road rather than at the world floor, so banking and loops need no
   special cases.
 - **`core/PostFX.ts`** — one MRT scene pass, then TRAA, motion blur, speed streaks, bloom and
-  chromatic aberration as a TSL graph. Bloom threshold sits above 1.0 because the pass is linear
+  chromatic aberration as a TSL graph. It ends on a vibrance grade over the tone-mapped scene
+  only: ACES rolls saturated highlights toward white, which is what stops a sunlit circuit
+  tearing, but on white concrete under a white sky it takes the last of the colour with it. The
+  lift falls off with how coloured a pixel already is, so the concrete and the sea gain and the
+  accent cyan is left where it was authored. Bloom threshold sits above 1.0 because the pass is linear
   HDR and sunlit concrete is already brighter than that.
 - **`core/Renderer.ts`** — renders at the display's real pixel density (`devicePixelRatio`), with
   a `matchMedia` listener for the window moving between monitors. Dynamic resolution is a
@@ -149,6 +153,16 @@ Both were found by measurement, and both would be easy to reintroduce:
 
 ## Two things that are easy to get wrong twice
 
+- **A track frame is left-handed.** `right` is `tangent × up`, so
+  `makeBasis(right, up, tangent)` has determinant −1. A quaternion cannot hold a reflection, so
+  `setFromRotationMatrix` silently discards it and hands back an unrelated rotation — the
+  grandstands shipped 25° off the road at the grid and 92° off at half distance, showing
+  backfaces. Negate one axis. Which one is not free: negate the tangent when the thing is
+  symmetric (`Craft`, the stands, the pillar capitals), and negate `right` when local −Z has to
+  stay the driver-facing side (`StartLine`, whose sign, trim and lamps all hang off it).
+  `tests/scenery.test.ts` pins the direction, not the determinant — the determinant of the
+  finished instance matrix is always positive, because the reflection never survives the
+  quaternion.
 - **Never let an animation take a real frame's `dt`.** `Loop` clamps what it hands the renderer
   to 100 ms. A hitch — a tab regaining focus, a shader compiling, the field settling at the flag
   — otherwise arrives as one multi-second step and every eased value in the game teleports.

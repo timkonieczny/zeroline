@@ -50,7 +50,8 @@ const MAX_PILLARS = 32;
 const _dummy = new Object3D();
 const _basis = new Matrix4();
 const _up = new Vector3();
-const _forward = new Vector3();
+/** The tangent, negated: `(right, up, tangent)` is left-handed. See below. */
+const _back = new Vector3();
 const _right = new Vector3();
 
 /**
@@ -105,9 +106,13 @@ export class TrackPillars {
       // The capital lies under the road and shares its bank, so a column on a
       // cambered corner meets the deck flush instead of cutting a wedge out.
       _up.copy(frame.up);
-      _forward.copy(frame.tangent);
+      // Negated, so the basis is right-handed. A track frame's `right` is
+      // `tangent x up`, which makes `(right, up, tangent)` a reflection — and a
+      // quaternion cannot hold one, so `setFromRotationMatrix` discards it and
+      // returns an unrelated rotation instead.
+      _back.copy(frame.tangent).negate();
       _right.copy(frame.right);
-      _basis.makeBasis(_right, _up, _forward);
+      _basis.makeBasis(_right, _up, _back);
       _dummy.quaternion.setFromRotationMatrix(_basis);
       _dummy.position.copy(frame.position).addScaledVector(frame.up, -DECK_GAP - CAPITAL_DEPTH * 0.5);
       _dummy.scale.set(frame.width * CAPITAL_SPAN, CAPITAL_DEPTH, CAPITAL_LENGTH);

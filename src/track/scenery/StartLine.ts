@@ -100,7 +100,17 @@ export class StartLine {
 
     const gantry = new Group();
     gantry.position.copy(_origin);
-    _basis.makeBasis(_right, _up, _tangent);
+    // `right` negated, not the tangent, and the choice matters.
+    //
+    // A track frame's `right` is `tangent × up`, so `(right, up, tangent)` is
+    // left-handed: `makeBasis` on it is a reflection, a quaternion cannot hold
+    // one, and `setFromRotationMatrix` quietly returns an unrelated rotation —
+    // this gantry stood 25 degrees off the road. Either axis can be negated to
+    // make it proper, but everything hung on this frame faces local -Z (the
+    // trim, both lamp faces, the sign), so local +Z has to stay the direction
+    // of travel. Negating the tangent instead turns the whole gantry around
+    // and shows the field the back of the board.
+    _basis.makeBasis(_right.clone().negate(), _up, _tangent);
     gantry.quaternion.setFromRotationMatrix(_basis);
     this.group.add(gantry);
 

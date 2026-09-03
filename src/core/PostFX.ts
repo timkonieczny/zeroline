@@ -8,10 +8,13 @@ import {
   type WebGPURenderer,
 } from 'three/webgpu';
 import {
+  clamp,
   convertToTexture,
   dot,
   float,
   int,
+  max,
+  min,
   mix,
   mrt,
   output,
@@ -21,6 +24,7 @@ import {
   uniform,
   vec2,
   vec3,
+  vec4,
   velocity,
 } from 'three/tsl';
 import { bloom } from 'three/addons/tsl/display/BloomNode.js';
@@ -97,6 +101,28 @@ export const QUALITY_PRESETS: Record<QualityLevel, PostFXQuality> = {
  */
 const BLUR_REFERENCE_FRAME = 1 / 60;
 /** Hard cap on the normalising factor, so one long frame cannot smear the world. */
+/** Rec. 709 luminance weights, for the grade below. */
+const LUMA = [0.2126, 0.7152, 0.0722] as const;
+/**
+ * How far a fully neutral pixel is pushed away from grey.
+ *
+ * ACES is doing its job — it rolls saturated highlights off toward white, which
+ * is what keeps a sunlit circuit from tearing — but on a set that is already
+ * white concrete under a white sky it takes the last of the colour out with it,
+ * and the result reads as a grey day rather than high summer. This puts it
+ * back after the tone map, where a grade belongs.
+ */
+const VIBRANCE = 1.34;
+/**
+ * How quickly the lift falls away as a pixel is already coloured.
+ *
+ * Vibrance, not saturation. A flat multiplier would push the accent cyan, the
+ * boost pads and the pickup trim straight out of gamut and clip them to a
+ * primary; this leaves them where they were authored and spends its effect on
+ * the concrete, the sea and the sky instead.
+ */
+const VIBRANCE_KNEE = 3.2;
+
 /**
  * What the exposure climbs to inside a tunnel.
  *
@@ -414,13 +440,30 @@ export class PostFX {
       const overlayPass = pass(overlay.scene, overlay.camera);
       const hudColour = overlayPass.getTextureNode('output');
 
-      const scene = asColour(renderOutput(node, ACESFilmicToneMapping, SRGBColorSpace));
+      const toned = asColour(renderOutput(node, ACESFilmicToneMapping, SRGBColorSpace));
+      const scene = PostFX.vibrance(toned);
       const hud = asColour(renderOutput(hudColour, NoToneMapping, SRGBColorSpace));
       node = asColour(mix(scene, hud, hudColour.a));
       this.post.outputColorTransform = false;
     }
 
     this.post.outputNode = node;
+  }
+
+  /**
+   * A vibrance grade, in display space and on the scene alone.
+   *
+   * On the scene alone deliberately: the interface is already composited from
+   * authored colours through `NoToneMapping`, so it needs no correcting and
+   * would only be pushed out of the palette it was designed in.
+   */
+  private static vibrance(colour: Node<'vec4'>): Node<'vec4'> {
+    const rgb = colour.rgb;
+    const luma = dot(rgb, vec3(...LUMA));
+    // How coloured this pixel already is: nothing for grey, one for a primary.
+    const chroma = max(rgb.x, max(rgb.y, rgb.z)).sub(min(rgb.x, min(rgb.y, rgb.z)));
+    const lift = mix(float(VIBRANCE), float(1), clamp(chroma.mul(VIBRANCE_KNEE), 0, 1));
+    return vec4(mix(vec3(luma), rgb, lift), colour.a) as unknown as Node<'vec4'>;
   }
 
   /**
