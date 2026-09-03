@@ -28,6 +28,27 @@ const CROWD_AIR = 2600;
 /** How long the crowd takes to swell and fade as a craft passes, in seconds. */
 const CROWD_GLIDE = 0.22;
 /**
+ * The safety limiter on the master bus.
+ *
+ * Nothing in this graph was watching the ceiling. Alongside a grandstand the
+ * sustained sum is now the crowd at 0.62 plus the engine's tone and air at
+ * about 0.43, and a detonation adds another 0.6 of shaped noise on top of a
+ * 0.45 blip — so a missile going off as the player passes a stand clipped at
+ * the destination. Raising the crowd made that routine rather than marginal.
+ *
+ * A limiter rather than turning the crowd back down, because the loudness is
+ * the point: a full stand alongside should be the loudest thing in the race
+ * after the engine. Threshold just under unity, a high ratio and a fast
+ * attack, so it does nothing at all until something is genuinely about to
+ * clip and then only ducks the peak.
+ */
+const LIMIT_THRESHOLD = -2;
+const LIMIT_RATIO = 20;
+const LIMIT_KNEE = 3;
+const LIMIT_ATTACK = 0.003;
+const LIMIT_RELEASE = 0.25;
+
+/**
  * Loudest the crowd ever gets, against the effects bus.
  *
  * A grandstand alongside is meant to be the loudest thing in the race after
@@ -54,6 +75,7 @@ const PAD_ROOT = 73.42;
 export class Audio {
   private context: AudioContext | null = null;
   private master: GainNode | null = null;
+  private limiter: DynamicsCompressorNode | null = null;
   private effectsBus: GainNode | null = null;
   private musicBus: GainNode | null = null;
 
@@ -100,9 +122,20 @@ export class Audio {
 
   private build(): void {
     const ctx = this.context!;
+    // Everything meets here, and the limiter is the last thing before the
+    // speakers: `master` is a plain gain the player controls, so it cannot be
+    // the thing that keeps the sum in range.
+    this.limiter = ctx.createDynamicsCompressor();
+    this.limiter.threshold.value = LIMIT_THRESHOLD;
+    this.limiter.ratio.value = LIMIT_RATIO;
+    this.limiter.knee.value = LIMIT_KNEE;
+    this.limiter.attack.value = LIMIT_ATTACK;
+    this.limiter.release.value = LIMIT_RELEASE;
+    this.limiter.connect(ctx.destination);
+
     this.master = ctx.createGain();
     this.master.gain.value = this.mix.master;
-    this.master.connect(ctx.destination);
+    this.master.connect(this.limiter);
 
     this.effectsBus = ctx.createGain();
     this.effectsBus.gain.value = this.mix.effects;
@@ -498,6 +531,8 @@ export class Audio {
     this.stopAmbience();
     void this.context?.close().catch(() => undefined);
     this.context = null;
+    this.limiter = null;
+    this.master = null;
     this.started = false;
   }
 

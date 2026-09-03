@@ -466,27 +466,41 @@ export class App {
     // Culling is off for the whole of it. A pipeline is built when its object
     // is first *drawn*, so anything outside the frustum of a warm frame is a
     // stall still waiting to happen — and the camera teleports, so most of the
-    // circuit is outside most of them. Both ends of each shot's move are drawn
-    // too, because the shadow cascade and the water's reflection are fitted to
-    // the camera and the two ends are two different sets of work. One frame
-    // each: a pipeline is built by the first draw, and a second would only be
-    // buying temporal history that the next teleport throws away.
+    // circuit is outside most of them. With the frustum out of the way one warm
+    // frame draws every object in the scene, into the shadow map and the water's
+    // reflection as well as the colour pass.
+    //
+    // One frame per shot, and resist adding more. A pipeline is keyed on its
+    // material, its geometry and the pass it is drawn into — never on the
+    // camera's transform — so with culling suspended a second viewpoint draws
+    // the identical set through the identical passes and buys nothing. Nothing
+    // camera-fitted moves here either: the sun's shadow frustum and the sea
+    // follow the camera from `RaceStage.render`, which this deliberately does
+    // not call. Drawing both ends of each move cost twice the most expensive
+    // part of a load for no pipelines at all.
+    //
+    // Hidden objects are not covered — an invisible object is skipped before it
+    // is culled — so the countdown lamps and a craft's deflector bubble still
+    // compile the first time they are shown.
     const camera = this.renderer.camera;
     _warmPosition.copy(camera.position);
     _warmRotation.copy(camera.quaternion);
-    const restoreCulling = this.race.suspendCulling();
 
-    for (let shot = 0; shot < this.race.introShots; shot++) {
-      for (const at of [0, 1]) {
-        this.race.previewIntroShot(shot, camera, at);
+    // Restored in a `finally`: the stage outlives the race, so a throw part-way
+    // through would leave the whole circuit uncullable for every frame after it.
+    const restoreCulling = this.race.suspendCulling();
+    try {
+      for (let shot = 0; shot < this.race.introShots; shot++) {
+        // The frame the cut lands on, which is the one that has to be cheap.
+        this.race.previewIntroShot(shot, camera, 0);
         this.racePost.render();
         await App.nextFrame();
       }
+    } finally {
+      restoreCulling();
+      camera.position.copy(_warmPosition);
+      camera.quaternion.copy(_warmRotation);
     }
-
-    restoreCulling();
-    camera.position.copy(_warmPosition);
-    camera.quaternion.copy(_warmRotation);
   }
 
   private static wait(ms: number): Promise<void> {

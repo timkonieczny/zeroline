@@ -217,18 +217,23 @@ export class RaceStage {
    * Only for the warm-up. A pipeline is built the first time its object is
    * actually drawn, so anything outside the frustum of a warm frame is a stall
    * still waiting to happen — and with the camera teleporting between shots,
-   * most of the circuit is outside most of them. One uncullied frame draws the
-   * lot.
+   * most of the circuit is outside most of them. One unculled frame draws
+   * everything in the scene that is visible; something hidden is skipped before
+   * it is ever culled, so it is not covered by this.
+   *
+   * Only objects that were being culled are collected, so the undo restores
+   * exactly them — the sky dome and the boost flames turn culling off for
+   * themselves and must stay that way.
    */
   suspendCulling(): () => void {
-    const culled: { object: Object3D; was: boolean }[] = [];
+    const suspended: Object3D[] = [];
     this.scene.traverse((object) => {
       if (!object.frustumCulled) return;
-      culled.push({ object, was: true });
+      suspended.push(object);
       object.frustumCulled = false;
     });
     return () => {
-      for (const entry of culled) entry.object.frustumCulled = entry.was;
+      for (const object of suspended) object.frustumCulled = true;
     };
   }
 

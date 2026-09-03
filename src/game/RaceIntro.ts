@@ -102,9 +102,8 @@ export class RaceIntro {
    * reflected. Drawing each shot while the curtain is down pays all of that
    * where a pause is expected.
    *
-   * @param at Where along the shot's move to stand. Both ends get drawn, not
-   *   just the middle: the shadow cascade and the water's reflection are fitted
-   *   to the camera, so the two ends of a move are two different sets of work.
+   * @param at Where along the shot's move to stand. `0` is the frame the cut
+   *   lands on, which is the one that has to be cheap.
    */
   preview(index: number, camera: PerspectiveCamera, track: Track, at = 0.5): void {
     const shot = this.shots[Math.min(index, this.shots.length - 1)]!;

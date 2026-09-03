@@ -148,15 +148,19 @@ tests/       Vitest suites for the simulation
 
 ## Things that were slow, and why they are not any more
 
-- **The intro's cuts stalled for a second each.** Every pass a frame is made of — the shadow
-  cascade, the water's reflection, the post chain's depth buffer — builds its state the first
+Every one of these was found by measurement, and every one would be easy to reintroduce:
+
+- **The intro's cuts stalled for a second each.** Every pass a frame is made of — the sun's
+  shadow map, the water's reflection, the post chain's depth buffer — builds its state the first
   time it is asked for, and a camera that teleports across the circuit asks for all of it at
-  once. `App.warmPipelines` draws each shot behind the curtain, from both ends of its move and
-  **with frustum culling suspended across the scene**: a pipeline is built when its object is
-  first *drawn*, so anything culled during a warm frame is a stall still waiting to happen.
-
-Both were found by measurement, and both would be easy to reintroduce:
-
+  once. `App.warmPipelines` draws each shot behind the curtain **with frustum culling suspended
+  across the scene**: a pipeline is built when its object is first *drawn*, so anything culled
+  during a warm frame is a stall still waiting to happen. One frame per shot is enough and more
+  is waste — a pipeline is keyed on material, geometry and pass, never on the camera, and
+  nothing camera-fitted moves during a warm-up because `RaceStage.render` is not what runs it.
+  Measured after: 12–18 ms a frame either side of all three cuts. It does not cover anything
+  *hidden*, though — an invisible object is skipped before it is culled — so the countdown
+  lamps and the deflector bubble still compile the first time they are shown.
 - **The racing line's relaxation** sampled the spline three times per point per pass — six
   hundred passes over sixteen hundred points. Three seconds of blocked main thread on every
   circuit load. The frames do not change between passes, so they are flattened into typed
