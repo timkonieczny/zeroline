@@ -125,7 +125,12 @@ tests/       Vitest suites for the simulation
   under a tunnel. Both read the same function, because the day they disagree is the day there
   is a gap in the circuit somebody drives through.
 - **`track/scenery/Grandstands.ts`** — stands on the straights and a facing pair at the grid,
-  with about 3000 spectators in one instanced draw. Dark anodised steel, the one built thing on
+  with about 3000 spectators in one instanced draw. `STAND_LIFT` is derived from the sight line
+  rather than chosen: the shortest spectator in the front row has to see over `WALL_HEIGHT`,
+  and every row behind is higher again, so clearing the front row clears the house. Built off
+  the road plane instead — as it was — the front rows sat below both the track's wall and the
+  stand's own rail, looking at concrete, and from the cockpit they read as being under the
+  circuit. `tests/scenery.test.ts` asserts the sight line, not the number. Dark anodised steel, the one built thing on
   the circuit that is not white: a stand in the same precast as the city behind it has no
   silhouette, and the crowd needs a dark ground to read against. Each stand is nine straight
   boxes following a road that climbs and turns, so every swept box is cut a tenth longer than

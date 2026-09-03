@@ -6,6 +6,10 @@ import { Skyline } from '@/track/scenery/Skyline';
 import { Grandstands, type StandSite } from '@/track/scenery/Grandstands';
 import { TrackPillars } from '@/track/scenery/TrackPillars';
 import { SEA_LEVEL } from '@/track/scenery/Environment';
+import { WALL_HEIGHT } from '@/track/TrackGeometry';
+
+/** Eye height of a seated spectator above their seat, from `Grandstands`. */
+const SEATED_EYE = 0.85;
 import { LANE_CLEARANCE, LANE_HALF_WIDTH, skyHighwayLanes } from '@/track/scenery/SkyHighway';
 import { placeCrowd } from '@/game/AudioDirector';
 
@@ -295,6 +299,31 @@ describe('grandstands', () => {
       expect(Math.abs(at.lateral)).toBeGreaterThan(track.frameAt(at.s).width * 0.5);
       expect(seat.y).toBeGreaterThan(SEA_LEVEL);
     }
+  });
+
+  it('gives every spectator a view over the barrier', () => {
+    // The whole stand used to be built off the road plane, which sat the front
+    // rows below both the track's wall and the stand's own rail: they were
+    // looking at concrete, and from the cockpit they read as being under the
+    // circuit. The stand's lift is derived from this sight line, so this is the
+    // assertion the number exists to satisfy.
+    const crowd = namedMesh(stands.group, 'crowd');
+    const matrix = new Matrix4();
+    const seat = new Vector3();
+    const scale = new Vector3();
+    const spin = new Quaternion();
+    let lowest = Infinity;
+
+    for (let i = 0; i < crowd.count; i++) {
+      crowd.getMatrixAt(i, matrix);
+      matrix.decompose(seat, spin, scale);
+      // `height` is measured from the road surface, which is what the barrier
+      // stands on — so the two are directly comparable.
+      const eye = track.collision.query(seat).height + SEATED_EYE * scale.y;
+      lowest = Math.min(lowest, eye);
+    }
+
+    expect(lowest).toBeGreaterThan(WALL_HEIGHT);
   });
 });
 

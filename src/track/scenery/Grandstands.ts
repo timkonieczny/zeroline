@@ -27,6 +27,7 @@ import { Rng } from '@/core/Rng';
 import type { Track } from '../Track';
 import type { Footprint } from './Skyline';
 import { SEA_LEVEL } from './Environment';
+import { WALL_HEIGHT } from '../TrackGeometry';
 
 // --- The stands ------------------------------------------------------------
 
@@ -41,8 +42,37 @@ const TIERS = 11;
 /** Depth and rise of one row, in metres. A steep continental rake. */
 const TIER_DEPTH = 1.15;
 const TIER_RISE = 0.82;
-/** Height of the debris fence in front of the first row, in metres. */
-const BARRIER_HEIGHT = 2.2;
+/**
+ * Height of the rail in front of the first row, in metres.
+ *
+ * Low enough that the front row sees over it too. At 2.2 m it was taller than
+ * the people behind it were sitting, which is a wall, not a rail.
+ */
+const BARRIER_HEIGHT = 1.2;
+
+/** Eye height of a seated spectator above their own seat, in metres. */
+const SEATED_EYE = 0.85;
+/** How much the smallest spectator is scaled down; the worst case for a view. */
+const FIGURE_SCALE_LOW = 0.9;
+const FIGURE_SCALE_HIGH = 1.06;
+/** Metres the front row's sight line clears the track's barrier by. */
+const SIGHT_CLEARANCE = 0.65;
+/**
+ * How high the stand's own floor stands above the road, in metres.
+ *
+ * Derived, not chosen. The whole structure used to be built off the road
+ * plane, which put the front rows below both barriers — a spectator on the
+ * first tier had their eye at 1.67 m against a 3.4 m track wall. They could
+ * see nothing, and from the cockpit they read as sitting under the circuit.
+ *
+ * So it comes off the sight line instead: the shortest person in the front row
+ * has their eye at `STAND_LIFT + TIER_RISE + SEATED_EYE * FIGURE_SCALE_LOW`,
+ * and that has to clear `WALL_HEIGHT` with room to spare. Every row behind is
+ * higher again, so clearing the front row clears the house — and if the
+ * barrier ever changes height, this follows it.
+ */
+const STAND_LIFT =
+  WALL_HEIGHT + SIGHT_CLEARANCE - TIER_RISE - SEATED_EYE * FIGURE_SCALE_LOW;
 /**
  * How much longer than its pitch each swept box is made.
  *
@@ -432,7 +462,7 @@ export class Grandstands {
       _dummy.position
         .copy(frame.position)
         .addScaledVector(frame.right, across)
-        .addScaledVector(frame.up, up);
+        .addScaledVector(frame.up, up + STAND_LIFT);
       _dummy.scale.set(width * bias, height * bias, length * bias);
       _dummy.updateMatrix();
       this.structure.setMatrixAt(count, _dummy.matrix);
@@ -479,7 +509,7 @@ export class Grandstands {
       // solve — but a solid pier is a hundred metres of blank concrete wall,
       // which from the circuit's own flyover reads as a cliff. A deck on
       // columns instead: the same answer the road itself gives.
-      const drop = frame.position.y - SEA_LEVEL + 6;
+      const drop = frame.position.y - SEA_LEVEL + STAND_LIFT + 6;
       place(s, side * (front + depth * 0.5), -APRON_DEPTH * 0.5, depth, APRON_DEPTH, run, CANOPY);
       for (const at of [front + COLUMN_SIDE, back - COLUMN_SIDE]) {
         place(s, side * at, -drop * 0.5 - APRON_DEPTH, COLUMN_SIDE, drop, COLUMN_SIDE, FRAME);
@@ -524,8 +554,8 @@ export class Grandstands {
           .addScaledVector(frame.right, side * (front + TIER_DEPTH * (tier + 0.75)) + rng.range(-0.12, 0.12))
           // Exactly the top of their own tier box, which is at `rise`. Adding
           // clearance here is what had the whole crowd hovering 40 cm up.
-          .addScaledVector(frame.up, TIER_RISE * (tier + 1));
-        _dummy.scale.setScalar(rng.range(0.9, 1.06));
+          .addScaledVector(frame.up, STAND_LIFT + TIER_RISE * (tier + 1));
+        _dummy.scale.setScalar(rng.range(FIGURE_SCALE_LOW, FIGURE_SCALE_HIGH));
         _dummy.updateMatrix();
         this.crowd.setMatrixAt(count, _dummy.matrix);
         this.helmets.setMatrixAt(count, _dummy.matrix);

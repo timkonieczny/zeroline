@@ -31,8 +31,13 @@ export const TUNNEL_SKIRT = 1.45;
 
 const _portal = new Vector3();
 
-/** Height of the barrier above the road, in metres. */
-const WALL_HEIGHT = 3.4;
+/**
+ * Height of the barrier above the road, in metres.
+ *
+ * Exported because it is what a grandstand has to see over: the front row's
+ * eye line is set against this, and the day one moves the other has to follow.
+ */
+export const WALL_HEIGHT = 3.4;
 /** How far the barrier leans away from the road over its height, in metres. */
 const WALL_LEAN = 0.5;
 /** Width of the kerb strip at each edge, in metres. */
