@@ -148,16 +148,7 @@ export class App {
 
   constructor(private readonly onStatus: (text: string) => void) {
     this.settings = loadSettings();
-    // A phone's first run, before it has an opinion. This chain costs 35 ms a
-    // frame on a weak laptop iGPU at its lowest rung; a handheld is not going
-    // to do better, and a player whose first impression is six frames a second
-    // never gets as far as the settings screen.
-    // Quality only. Adaptive resolution is deliberately left off: every step it
-    // takes calls `setSize`, which reallocates the backbuffer and with it every
-    // render target in the post chain, and its 0.06-down / 0.03-up steps hunt
-    // rather than settle. On a phone that is a reallocation every second or so,
-    // and the frames caught mid-swap are the flicker.
-    if (IS_TOUCH_DEVICE && !hasStoredSettings()) this.settings.quality = 'low';
+    if (IS_TOUCH_DEVICE) this.seedPhoneDefaults();
     this.audio.setMix(this.settings.mix);
 
     this.perf = document.createElement('div');
@@ -168,6 +159,35 @@ export class App {
       (step) => this.tick(step),
       (alpha, frameTime) => this.render(alpha, frameTime),
     );
+  }
+
+  /**
+   * What a phone should be running at until it says otherwise.
+   *
+   * Native density is the wrong default here and it is not close: a Pixel 8 in
+   * landscape is 864 by 327 at a device ratio of 2.625, so "1" means two and a
+   * quarter million pixels through the whole post chain — more than the desktop
+   * this was tuned on renders at its *lowest* rung.
+   *
+   * Applied even over stored settings, but only where the stored value is the
+   * default. Nobody on a phone chose native; they were handed it, and the
+   * Resolution row is right there for anyone who disagrees.
+   *
+   * Adaptive resolution stays off deliberately. Every step it takes calls
+   * `setSize`, which reallocates the backbuffer and every render target behind
+   * it, and its 0.06-down / 0.03-up steps hunt rather than settle.
+   */
+  private seedPhoneDefaults(): void {
+    const fresh = !hasStoredSettings();
+    if (fresh) {
+      this.settings.quality = 'low';
+      this.settings.antialias = 'none';
+    }
+    if (fresh || this.settings.resolutionScale >= 1) {
+      const density = window.devicePixelRatio || 1;
+      this.settings.resolutionScale = density > 1.05 ? 1 / density : 0.6;
+    }
+    saveSettings(this.settings);
   }
 
   private pixelRatio(): number {

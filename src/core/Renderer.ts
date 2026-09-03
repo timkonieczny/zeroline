@@ -1,6 +1,7 @@
 import { nearestRung, resolutionLadder, type ResolutionRung } from './ResolutionLadder';
 import { ACESFilmicToneMapping, PerspectiveCamera, WebGPURenderer } from 'three/webgpu';
 import { clamp } from './math';
+import { IS_TOUCH_DEVICE } from './Platform';
 
 export interface RendererStats {
   /** Backbuffer width in real device pixels. */
@@ -134,7 +135,12 @@ export class Renderer {
       // on a machine with anything else running says as much about the browser
       // as about the game — and says nothing at all in a tab the browser has
       // throttled. This is the number to tune against.
-      trackTimestamp: true,
+      //
+      // Not on a phone. It resolves a query every single frame for a figure
+      // nobody is reading there, and per-frame timestamp resolution is exactly
+      // the kind of thing mobile drivers implement least carefully — a tuning
+      // instrument is not worth a class of driver bug in a shipped build.
+      trackTimestamp: !IS_TOUCH_DEVICE,
     });
     this.renderer.toneMapping = ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 0.82;
@@ -189,6 +195,10 @@ export class Renderer {
       this.adapterName = [info?.vendor, info?.architecture, info?.description]
         .filter((part) => part)
         .join(' ') || 'unnamed adapter';
+
+      // On a phone, three's own device is the right one: the reason to take
+      // this over is to keep `timestamp-query`, which a phone does not want.
+      if (IS_TOUCH_DEVICE) return;
 
       const device = await Renderer.claimDevice(adapter);
       (this.renderer as unknown as { backend: { parameters: { device?: GPUDevice } } }).backend.parameters.device =
