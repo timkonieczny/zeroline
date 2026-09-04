@@ -28,6 +28,54 @@ const CROWD_AIR = 2600;
 /** How long the crowd takes to swell and fade as a craft passes, in seconds. */
 const CROWD_GLIDE = 0.22;
 /**
+ * The circuit announcer: a two-tone tannoy chime, then the track's name.
+ *
+ * The chime is synthesised like everything else and goes through the effects
+ * bus, so it can be placed at the gantry and thrown into the reverb below. The
+ * *words* cannot be. `speechSynthesis` writes straight to the output device in
+ * every browser and there is no way to route it into an `AudioContext`, so the
+ * voice is dry, centred, and its level can only track the player's own mix
+ * rather than being summed with it. The alternatives were a formant
+ * synthesiser saying it, which would not have been intelligible, or an audio
+ * file, which this repository does not have.
+ */
+const CHIME_LOW = 587.33;
+const CHIME_HIGH = 880;
+/** Seconds between the two notes of the chime, and how long each rings. */
+const CHIME_GAP = 0.26;
+const CHIME_RING = 0.9;
+/** Milliseconds after the chime before the voice starts. */
+const ANNOUNCE_DELAY = 620;
+/**
+ * How loud the announcement is against the crowd.
+ *
+ * Above one: a PA is built to be heard over a full grandstand, and at parity
+ * with the crowd it disappeared into it.
+ */
+const ANNOUNCE_OVER_CROWD = 1.15;
+/** How much of the chime is sent to the hall. */
+const ANNOUNCE_WET = 0.5;
+/**
+ * How much the voice's level is scaled up before it leaves.
+ *
+ * `SpeechSynthesisUtterance.volume` is a fraction of the *device* volume, not
+ * of this graph, so the two are not on the same scale. This makes the words
+ * land somewhere near the chime that introduced them.
+ */
+const VOICE_MAKEUP = 2.2;
+
+/**
+ * Length of the synthesised reverb tail, in seconds, and how fast it decays.
+ *
+ * A convolver rather than a delay line, because what a gantry tannoy needs is
+ * a room — a stadium's worth of concrete over open water — and not a slapback.
+ * The impulse is exponentially-decaying noise generated here, like every other
+ * sound in this file; a recorded impulse response would be a binary asset.
+ */
+const REVERB_SECONDS = 2.4;
+const REVERB_DECAY = 3.4;
+
+/**
  * The safety limiter on the master bus.
  *
  * Nothing in this graph was watching the ceiling. Alongside a grandstand the
@@ -88,6 +136,10 @@ export class Audio {
     gain: GainNode;
   } | null = null;
 
+  private reverb: ConvolverNode | null = null;
+  /** Voices arrive asynchronously, so the one we settle on is kept. */
+  private announcer: SpeechSynthesisVoice | null = null;
+
   private crowd: {
     noise: AudioBufferSourceNode;
     gain: GainNode;
@@ -144,6 +196,22 @@ export class Audio {
     this.musicBus = ctx.createGain();
     this.musicBus.gain.value = this.mix.music;
     this.musicBus.connect(this.master);
+
+    // The voice list is worth asking for now rather than at the moment of
+    // speaking. `getVoices` comes back empty on the first call after a load
+    // and fills in asynchronously, so an announcement that arrived before it
+    // did would fall through to the platform default — which on this machine
+    // is a man, and the announcer is supposed to be a woman.
+    Audio.primeVoices(() => {
+      this.announcer = null;
+      this.pickAnnouncer(window.speechSynthesis);
+    });
+
+    // A hall for the tannoy to ring in. Fed by sends and never in line, so
+    // everything else in the graph stays dry.
+    this.reverb = ctx.createConvolver();
+    this.reverb.buffer = Audio.impulse(ctx);
+    this.reverb.connect(this.effectsBus);
 
     // One second of white noise, reused by every noise-based effect.
     const frames = Math.floor(ctx.sampleRate);
@@ -439,6 +507,137 @@ export class Audio {
     this.padVoices = [];
   }
 
+  // --- The announcer ------------------------------------------------------
+
+  /**
+   * The circuit's name over the tannoy on the gantry.
+   *
+   * @param name The circuit, in the wording its own sign uses.
+   * @param level 0 with the gantry out of earshot, 1 standing under it.
+   * @param pan -1 hard left, 1 hard right. The chime follows this; the voice
+   *   cannot, for the reason given on `CHIME_LOW`.
+   */
+  announce(name: string, level: number, pan: number): void {
+    const ctx = this.context;
+    if (!ctx || !this.effectsBus || !this.reverb) return;
+
+    const loudness = clamp01(level) * CROWD_PEAK * ANNOUNCE_OVER_CROWD;
+    const panner = ctx.createStereoPanner();
+    panner.pan.value = Math.max(-1, Math.min(1, pan));
+    panner.connect(this.effectsBus);
+
+    const send = ctx.createGain();
+    send.gain.value = ANNOUNCE_WET;
+    send.connect(this.reverb);
+    panner.connect(send);
+
+    [CHIME_LOW, CHIME_HIGH].forEach((frequency, index) => {
+      const at = ctx.currentTime + index * CHIME_GAP;
+      const osc = ctx.createOscillator();
+      // A triangle, not a sine: a station chime has an edge on it.
+      osc.type = 'triangle';
+      osc.frequency.value = frequency;
+
+      const gain = ctx.createGain();
+      gain.gain.setValueAtTime(0.0001, at);
+      gain.gain.linearRampToValueAtTime(loudness * 0.5, at + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, at + CHIME_RING);
+
+      osc.connect(gain);
+      gain.connect(panner);
+      osc.start(at);
+      osc.stop(at + CHIME_RING + 0.1);
+    });
+
+    this.speak(`Welcome to ${name}`, loudness);
+  }
+
+  /**
+   * The words, through the browser's own speech synthesis.
+   *
+   * The level is taken from the player's own mix so it at least moves with the
+   * sliders, and the rate and pitch are pushed toward an announcer rather than
+   * a screen reader: slower, a little brighter, never the default cadence.
+   */
+  private speak(text: string, loudness: number): void {
+    const speech = window.speechSynthesis;
+    if (!speech) return;
+
+    window.setTimeout(() => {
+      const utterance = new SpeechSynthesisUtterance(text);
+      const voice = this.pickAnnouncer(speech);
+      if (voice) utterance.voice = voice;
+      utterance.lang = voice?.lang ?? 'en-GB';
+      utterance.rate = 0.92;
+      utterance.pitch = 1.05;
+      utterance.volume = clamp01(loudness * this.mix.effects * this.mix.master * VOICE_MAKEUP);
+      speech.speak(utterance);
+    }, ANNOUNCE_DELAY);
+  }
+
+  /**
+   * A clear female English voice, or the nearest the platform will give us.
+   *
+   * There is no attribute for the sex of a voice — the list is names and
+   * locales — so this is a search through the ones that are reliably female on
+   * each desktop platform, then any English voice, then whatever is first.
+   * Cached, because `getVoices` fills in asynchronously and returns an empty
+   * list on the first call after a load.
+   */
+  private pickAnnouncer(speech: SpeechSynthesis): SpeechSynthesisVoice | null {
+    if (this.announcer) return this.announcer;
+    const voices = speech.getVoices();
+    if (voices.length === 0) return null;
+
+    const known = ['samantha', 'zira', 'hazel', 'sonia', 'libby', 'aria', 'jenny', 'karen', 'moira'];
+    const english = voices.filter((voice) => voice.lang.toLowerCase().startsWith('en'));
+    this.announcer =
+      english.find((voice) => known.some((name) => voice.name.toLowerCase().includes(name))) ??
+      english.find((voice) => voice.name.toLowerCase().includes('female')) ??
+      english[0] ??
+      voices[0] ??
+      null;
+    return this.announcer;
+  }
+
+  /**
+   * Asks for the voice list, and asks again when the platform fills it in.
+   *
+   * Chrome populates it asynchronously and fires `voiceschanged` when it has;
+   * some platforms never fire it and have the list ready on the first call.
+   * Doing both covers each.
+   */
+  private static primeVoices(onReady: () => void): void {
+    const speech = window.speechSynthesis;
+    if (!speech) return;
+    if (speech.getVoices().length > 0) {
+      onReady();
+      return;
+    }
+    speech.addEventListener('voiceschanged', onReady, { once: true });
+  }
+
+  /**
+   * A stadium's worth of concrete, as exponentially-decaying noise.
+   *
+   * Stereo and decorrelated: the same noise in both ears is a comb filter, not
+   * a room. The sequence is the fixed generator this file uses everywhere, so
+   * a session sounds the same twice.
+   */
+  private static impulse(ctx: AudioContext): AudioBuffer {
+    const frames = Math.floor(ctx.sampleRate * REVERB_SECONDS);
+    const buffer = ctx.createBuffer(2, frames, ctx.sampleRate);
+    let seed = 0x1d872b41;
+    for (let channel = 0; channel < 2; channel++) {
+      const data = buffer.getChannelData(channel);
+      for (let i = 0; i < frames; i++) {
+        seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+        data[i] = ((seed / 0xffffffff) * 2 - 1) * (1 - i / frames) ** REVERB_DECAY;
+      }
+    }
+    return buffer;
+  }
+
   // --- Crowd ------------------------------------------------------------
 
   /**
@@ -526,11 +725,13 @@ export class Audio {
   }
 
   dispose(): void {
+    window.speechSynthesis?.cancel();
     this.stopEngine();
     this.stopCrowd();
     this.stopAmbience();
     void this.context?.close().catch(() => undefined);
     this.context = null;
+    this.reverb = null;
     this.limiter = null;
     this.master = null;
     this.started = false;

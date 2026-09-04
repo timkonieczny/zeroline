@@ -1,6 +1,8 @@
+import { Vector3, type PerspectiveCamera } from 'three';
 import type { Audio } from '@/core/Audio';
 import type { Race } from './Race';
 import type { StandSite } from '@/track/scenery/Grandstands';
+import { BEAM_HEIGHT } from '@/track/scenery/StartLine';
 import { clamp01 } from '@/core/math';
 
 /**
@@ -19,6 +21,18 @@ const EARSHOT = 340;
  * of the straight it is ahead.
  */
 const PAN_SPREAD = 90;
+
+/**
+ * Metres over which the gantry's tannoy fades out.
+ *
+ * Only ever heard from the grid, a few tens of metres under it, so this is
+ * really just a guard: if the announcement is ever triggered from elsewhere on
+ * the circuit it should not arrive at full volume.
+ */
+const TANNOY_EARSHOT = 220;
+
+const _toGantry = new Vector3();
+const _cameraRight = new Vector3();
 
 /** How loud the nearest stand is, and how far off-centre. */
 export interface CrowdPlacement {
@@ -76,6 +90,8 @@ export class AudioDirector {
   private lastCountdown = -1;
   private scrapeCooldown = 0;
   private stands: readonly StandSite[] = [];
+  /** One announcement per race, on the frame the orbit begins. */
+  private announced = false;
 
   constructor(
     private readonly audio: Audio,
@@ -94,9 +110,40 @@ export class AudioDirector {
     this.lastWeapon = null;
     this.lastDetonations = 0;
     this.lastCountdown = -1;
+    this.announced = false;
   }
 
-  update(dt: number): void {
+  /**
+   * Says the circuit's name once, as the intro hands the camera over.
+   *
+   * Placed on the gantry: the pan is where the lights are relative to where
+   * the camera is looking, which during the orbit sweeps as the camera comes
+   * round. Only the chime can actually follow it — `Audio.announce` explains
+   * why the words cannot.
+   */
+  private announce(camera: PerspectiveCamera): void {
+    const track = this.race.track;
+    const gantry = track.frameAt(track.startS);
+    _toGantry.copy(gantry.position).addScaledVector(gantry.up, BEAM_HEIGHT).sub(camera.position);
+
+    const distance = _toGantry.length();
+    _toGantry.normalize();
+    _cameraRight.setFromMatrixColumn(camera.matrixWorld, 0);
+
+    this.audio.announce(
+      track.definition.name,
+      clamp01(1 - distance / TANNOY_EARSHOT),
+      _toGantry.dot(_cameraRight),
+    );
+    this.announced = true;
+  }
+
+  /**
+   * @param orbiting True while the intro is circling the craft on the grid,
+   *   which is when the circuit announces itself. Passed in rather than read
+   *   off the stage, so this stays coupled to race state alone.
+   */
+  update(dt: number, camera?: PerspectiveCamera, orbiting = false): void {
     if (!this.audio.ready) return;
     const race = this.race;
     const player = race.player;
@@ -140,6 +187,8 @@ export class AudioDirector {
     }
 
     this.updateCrowd(player.state.s, clamp01(player.telemetry.speedFraction), race.track.length);
+
+    if (!this.announced && orbiting && camera) this.announce(camera);
 
     if (race.phase === 'countdown') {
       const remaining = Math.ceil(race.countdown);

@@ -212,6 +212,11 @@ export class RaceStage {
     return this.intro?.shotCount ?? 0;
   }
 
+  /** True while the intro's camera is orbiting the craft on the grid. */
+  get introOrbiting(): boolean {
+    return this.intro?.orbiting ?? false;
+  }
+
   /** Places the camera where shot `index` will put it, for warming pipelines. */
   previewIntroShot(index: number, camera: PerspectiveCamera, at = 0.5): void {
     this.intro?.preview(index, camera, this.track, at);

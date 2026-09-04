@@ -107,6 +107,13 @@ tests/       Vitest suites for the simulation
   transforms, and `AudioDirector.placeCrowd` already has both from the craft's arc length.
   `game/AudioDirector.ts` watches race state for edges and turns them into sound, so the
   simulation stays free of side effects and a replay cannot double-trigger anything.
+  **The announcer is the one sound that is not synthesised**, and it is the one thing in the
+  game that cannot be: `speechSynthesis` writes straight to the output device in every browser
+  and there is no way to route it into an `AudioContext`, so the words are dry, centred and
+  outside the mix — their level is derived from the player's own sliders instead of being summed
+  with them. What *is* in the graph is the tannoy chime that introduces them, panned at the
+  gantry and sent to a convolver whose impulse response is generated noise. A formant
+  synthesiser saying the circuit's name would have been in the graph and unintelligible.
 - **`game/Replay.ts`** — pose and speed for every craft at 30 Hz, played back on a loop once the
   flag is out. Playback writes into the craft's own state, so the camera, the models and the
   engine note cannot tell the difference between being driven and being replayed.

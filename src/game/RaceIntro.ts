@@ -81,6 +81,16 @@ export class RaceIntro {
     return this.elapsed < SHOT_TIME * this.shots.length + ORBIT_TIME;
   }
 
+  /**
+   * True once the establishing shots are done and the camera is orbiting in.
+   *
+   * The moment the circuit introduces itself: the cuts are over, the craft is
+   * on the grid and the countdown has not started.
+   */
+  get orbiting(): boolean {
+    return !this.cinematic && this.active;
+  }
+
   /** True while the establishing shots are running, so the HUD stays away. */
   get cinematic(): boolean {
     return this.elapsed < SHOT_TIME * this.shots.length;
