@@ -14,7 +14,7 @@ import { EquirectangularReflectionMapping, SRGBColorSpace, TextureLoader, type T
  * directional sun stays exactly where it was; the panorama supplies the look of
  * the sky and the structure in every reflection, not the light.
  */
-const SKY_URL = 'sky/sky-42-2k.png';
+const SKY_URL = 'sky/sky-05-2k.png';
 
 let cached: Promise<Texture> | null = null;
 let loaded: Texture | null = null;
