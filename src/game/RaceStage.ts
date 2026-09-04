@@ -99,7 +99,7 @@ export class RaceStage {
     this.scene.add(this.skyline.group);
 
     // After the skyline, which is what decides where the platforms are.
-    this.parks = new PlatformParks(this.skyline.platforms, this.track);
+    this.parks = new PlatformParks(this.skyline.platforms, this.skyline.footprints, this.track);
     this.scene.add(this.parks.group);
 
     this.highway = new SkyHighway(this.track);

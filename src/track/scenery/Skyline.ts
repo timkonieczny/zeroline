@@ -202,6 +202,15 @@ export class Skyline {
   readonly group = new Group();
   /** The decks the clusters stand on, for anything that wants to dress them. */
   readonly platforms: readonly Platform[];
+  /**
+   * Every building on the circuit, as a circle on the water.
+   *
+   * The platforms carry their own clusters, but they overlap one another in
+   * plan and plenty of towers stand in the sea on no platform at all — so a
+   * deck's own list is not enough to keep anything laid on it out of a
+   * neighbour's tower.
+   */
+  readonly footprints: readonly Footprint[];
   private readonly mesh: InstancedMesh;
   private readonly decks: InstancedMesh;
   private readonly storeys: InstancedBufferAttribute;
@@ -375,6 +384,10 @@ export class Skyline {
     this.decks.instanceMatrix.needsUpdate = true;
 
     this.platforms = platforms;
+    this.footprints = blocks.map((block) => ({
+      position: block.position.clone(),
+      radius: block.radius,
+    }));
     this.group.add(this.mesh, this.decks);
   }
 

@@ -128,8 +128,10 @@ tests/       Vitest suites for the simulation
   on. The ground is laid out before anything is planted: a promenade round every deck, cross
   paths threaded *between* the towers rather than through them, lawns in the blocks that are
   left, and a tree only ever on a lawn. Trees dotted straight onto concrete read as weeds, which
-  is what this replaced. Four instanced draws, 62k triangles, no per-frame cost — half what the
-  crowd costs. Trunk and crown are separate meshes for the same reason the crowd's bodies and
+  is what this replaced. Four instanced draws, 48k triangles, no per-frame cost. It is handed
+  `Skyline.footprints`, not just each deck's own cluster: platforms overlap one another in plan
+  and plenty of towers stand in the sea on no platform at all, so a deck's own list let lawns be
+  laid through a neighbour's building with trees inside it. Trunk and crown are separate meshes for the same reason the crowd's bodies and
   helmets are. Placement checks the road *above* each spot: platforms are allowed to sit under
   the circuit where it is high, but a nine-metre tree on one is not.
 - **`track/scenery/Grandstands.ts`** — stands on the straights and a facing pair at the grid,

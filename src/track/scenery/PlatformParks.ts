@@ -13,7 +13,7 @@ import { MeshStandardNodeMaterial } from 'three/webgpu';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { Rng } from '@/core/Rng';
 import type { Track } from '../Track';
-import type { Platform } from './Skyline';
+import type { Footprint, Platform } from './Skyline';
 
 // --- Trees -----------------------------------------------------------------
 
@@ -73,14 +73,30 @@ const LAWN_MAX = 46;
  * cost of throwing one is two rectangle tests.
  */
 const LAWN_ATTEMPTS = 160;
-/** Cross paths tried per platform, in each direction. */
-const CROSS_ATTEMPTS = 5;
+/**
+ * Cross paths tried per platform, in each direction.
+ *
+ * Three, not five, because both directions now actually land: while a new
+ * line was rejected for crossing one already laid, the second direction was
+ * mostly suppressed and five attempts bought what three do here. Five with
+ * the crossroads working paves half again as much deck and costs the parks
+ * four hundred trees.
+ */
+const CROSS_ATTEMPTS = 3;
 /** Shortest run of paving worth laying, in metres. */
 const MIN_PATH_RUN = 12;
 
-const LAWN_CAPACITY = 200;
-const PATH_CAPACITY = 200;
-const TREE_CAPACITY = 1100;
+/**
+ * Instance budgets.
+ *
+ * Meridian Coast fills roughly two thirds of each of these, and the overflow
+ * is silent — a deck laid after the cap is reached simply loses its paving.
+ * Headroom is a few kilobytes of instance matrix that is never drawn, so the
+ * caps are set well clear of the only circuit rather than snug against it.
+ */
+const LAWN_CAPACITY = 400;
+const PATH_CAPACITY = 400;
+const TREE_CAPACITY = 1600;
 
 const _dummy = new Object3D();
 const _spot = new Vector3();
@@ -113,7 +129,14 @@ function runsBetween(
     const offset = Math.abs(blocker.across - line);
     if (offset >= blocker.radius) continue;
     const half = Math.sqrt(blocker.radius * blocker.radius - offset * offset);
-    blocked.push({ from: blocker.at - half, to: blocker.at + half });
+    // Clamped into the run, and dropped if it never reaches it. The blockers
+    // include every tower near the deck rather than only the ones standing on
+    // it, and one sitting off the end used to push a run past `to` with it —
+    // which paved thirteen metres of open water.
+    const from2 = Math.max(from, blocker.at - half);
+    const to2 = Math.min(to, blocker.at + half);
+    if (to2 <= from2) continue;
+    blocked.push({ from: from2, to: to2 });
   }
   blocked.sort((a, b) => a.from - b.from);
 
@@ -136,7 +159,7 @@ function overlaps(a: Patch, b: Patch, margin = 0): boolean {
   );
 }
 
-/** Nearest distance from a circle's centre to a patch, negative when inside. */
+/** Whether a circle of `radius` at (x, z) misses the patch entirely. */
 function clearOf(patch: Patch, x: number, z: number, radius: number): boolean {
   const dx = Math.max(0, Math.abs(x - patch.x) - patch.width * 0.5);
   const dz = Math.max(0, Math.abs(z - patch.z) - patch.depth * 0.5);
@@ -165,7 +188,7 @@ export class PlatformParks {
   private readonly trunks: InstancedMesh;
   private readonly crowns: InstancedMesh;
 
-  constructor(platforms: readonly Platform[], track: Track) {
+  constructor(platforms: readonly Platform[], footprints: readonly Footprint[], track: Track) {
     const rng = new Rng(0x7ee5);
 
     this.lawns = new InstancedMesh(PlatformParks.slab(), PlatformParks.grass(), LAWN_CAPACITY);
@@ -218,31 +241,48 @@ export class PlatformParks {
       if (usable.width < PATH_WIDTH * 3 || usable.depth < PATH_WIDTH * 3) continue;
 
       // What a lawn has to stay out of, and — separately — the cross paths, so
-      // a new one does not land on top of an old one. The promenade is left out
-      // of that second list on purpose: a cross path is *supposed* to run into
-      // it at both ends, and testing against it rejected almost every one.
+      // a new one does not land on top of an old one. Kept per direction: two
+      // paths at right angles are a crossroads, not a clash, and testing a new
+      // line against the ones it crosses rejected nearly every second-direction
+      // path there was. The promenade is left out of both lists on purpose: a
+      // cross path is *supposed* to run into it at either end.
       const laid: Patch[] = [];
-      const crossings: Patch[] = [];
+      const crossings: [Patch[], Patch[]] = [[], []];
+      // Every tower anywhere near this deck, not just the cluster it carries.
+      // Platforms overlap one another in plan and many towers stand in the sea
+      // on no platform at all, so the deck's own list let lawns be laid
+      // straight through a neighbour's building — and trees planted inside it.
+      const reach = Math.hypot(platform.width, platform.depth) * 0.5 + LAWN_MAX;
+      const nearby = footprints.filter(
+        (f) =>
+          Math.abs(f.position.x - platform.centreX) < reach &&
+          Math.abs(f.position.z - platform.centreZ) < reach,
+      );
       const clearOfBuildings = (patch: Patch): boolean =>
-        platform.occupied.every((b) => clearOf(patch, b.x, b.z, b.radius + BUILDING_CLEARANCE));
+        nearby.every((f) =>
+          clearOf(patch, f.position.x, f.position.z, f.radius + BUILDING_CLEARANCE),
+        );
 
       // 1. The promenade: a walk right around the deck, inside the bare margin.
       //    Every platform gets one, whatever else fits, because it is the thing
-      //    that makes the slab read as somewhere rather than as a surface.
+      //    that makes the slab read as somewhere rather than as a surface. All
+      //    four sides or none: three quarters of a ring is a broken path.
       const ring: Patch[] = [
         { x: usable.x, z: usable.z - usable.depth * 0.5, width: usable.width, depth: PATH_WIDTH },
         { x: usable.x, z: usable.z + usable.depth * 0.5, width: usable.width, depth: PATH_WIDTH },
         { x: usable.x - usable.width * 0.5, z: usable.z, width: PATH_WIDTH, depth: usable.depth },
         { x: usable.x + usable.width * 0.5, z: usable.z, width: PATH_WIDTH, depth: usable.depth },
       ];
-      for (const strip of ring) {
-        if (pathCount >= PATH_CAPACITY) break;
-        lay(this.paths, pathCount++, strip, platform.topY, PATH_RISE);
-        laid.push(strip);
+      if (pathCount + ring.length <= PATH_CAPACITY) {
+        for (const strip of ring) {
+          lay(this.paths, pathCount++, strip, platform.topY, PATH_RISE);
+          laid.push(strip);
+        }
       }
 
       // 2. Cross paths, threaded between the towers rather than through them.
       for (const across of [true, false]) {
+        const parallel = crossings[across ? 0 : 1];
         for (let attempt = 0; attempt < CROSS_ATTEMPTS; attempt++) {
           if (pathCount >= PATH_CAPACITY) break;
 
@@ -251,10 +291,10 @@ export class PlatformParks {
             : usable.x + rng.range(-usable.width * 0.4, usable.width * 0.4);
           const span = across ? usable.width : usable.depth;
           const centre = across ? usable.x : usable.z;
-          const blockers = platform.occupied.map((b) => ({
-            at: across ? b.x : b.z,
-            across: across ? b.z : b.x,
-            radius: b.radius + BUILDING_CLEARANCE + PATH_WIDTH * 0.5,
+          const blockers = nearby.map((f) => ({
+            at: across ? f.position.x : f.position.z,
+            across: across ? f.position.z : f.position.x,
+            radius: f.radius + BUILDING_CLEARANCE + PATH_WIDTH * 0.5,
           }));
 
           const runs = runsBetween(centre - span * 0.5, centre + span * 0.5, blockers, line);
@@ -263,16 +303,17 @@ export class PlatformParks {
               ? { x: (run.from + run.to) * 0.5, z: line, width: run.to - run.from, depth: PATH_WIDTH }
               : { x: line, z: (run.from + run.to) * 0.5, width: PATH_WIDTH, depth: run.to - run.from },
           );
-          // All or nothing per line: half a cross path is a stub.
+          // All or nothing per line: half a cross path is a stub, so the
+          // budget is checked for the whole set before any of it is laid.
           if (strips.length === 0) continue;
-          if (strips.some((strip) => crossings.some((other) => overlaps(strip, other, PATH_WIDTH)))) {
+          if (pathCount + strips.length > PATH_CAPACITY) break;
+          if (strips.some((strip) => parallel.some((other) => overlaps(strip, other, PATH_WIDTH)))) {
             continue;
           }
           for (const strip of strips) {
-            if (pathCount >= PATH_CAPACITY) break;
             lay(this.paths, pathCount++, strip, platform.topY, PATH_RISE);
             laid.push(strip);
-            crossings.push(strip);
+            parallel.push(strip);
           }
         }
       }
@@ -281,8 +322,11 @@ export class PlatformParks {
       const parks: Patch[] = [];
       for (let attempt = 0; attempt < LAWN_ATTEMPTS; attempt++) {
         if (lawnCount >= LAWN_CAPACITY) break;
-        const width = rng.range(LAWN_MIN, Math.min(LAWN_MAX, usable.width * 0.5));
-        const depth = rng.range(LAWN_MIN, Math.min(LAWN_MAX, usable.depth * 0.5));
+        // Clamped rather than just capped: on a deck narrower than four lawns
+        // the cap falls below the minimum and the range runs backwards, which
+        // hands back a lawn *under* LAWN_MIN instead of one at it.
+        const width = rng.range(LAWN_MIN, Math.max(LAWN_MIN, Math.min(LAWN_MAX, usable.width * 0.5)));
+        const depth = rng.range(LAWN_MIN, Math.max(LAWN_MIN, Math.min(LAWN_MAX, usable.depth * 0.5)));
         const lawn: Patch = {
           x: usable.x + rng.range(-1, 1) * (usable.width - width) * 0.5,
           z: usable.z + rng.range(-1, 1) * (usable.depth - depth) * 0.5,
@@ -317,8 +361,10 @@ export class PlatformParks {
 
           // Nothing grows up through the circuit. Measured against the actual
           // road above this spot rather than a blanket keep-out, because the
-          // platforms are meant to run under it where it is high enough.
-          _spot.set(x, platform.topY, z);
+          // platforms are meant to run under it where it is high enough. The
+          // sample sits on the lawn, not the deck, because that is where the
+          // tree's foot actually is.
+          _spot.set(x, platform.topY + LAWN_RISE, z);
           const road = track.collision.query(_spot);
           const half = track.frameAt(road.s).width * 0.5;
           const under = Math.abs(road.lateral) < half + ROAD_HEADROOM;
@@ -405,7 +451,10 @@ export class PlatformParks {
       return ball;
     });
     const merged = mergeGeometries(parts, false);
-    if (!merged) return parts[0]!;
+    if (!merged) {
+      for (const part of parts.slice(1)) part.dispose();
+      return parts[0]!;
+    }
     for (const part of parts) part.dispose();
     return merged;
   }

@@ -63,7 +63,7 @@ const stands = new Grandstands(track);
 // Built the way the stage builds it: the stands first, the city around them.
 const skyline = new Skyline(track, stands.footprints);
 const pillars = new TrackPillars(track);
-const parks = new PlatformParks(skyline.platforms, track);
+const parks = new PlatformParks(skyline.platforms, skyline.footprints, track);
 
 function namedMesh(group: { children: { name: string }[] }, name: string): InstancedMesh {
   const mesh = group.children.find((child) => child.name === name);
@@ -404,6 +404,23 @@ describe('platform parks', () => {
       );
       expect(home, `slab at ${piece.x.toFixed(0)},${piece.z.toFixed(0)} sits on nothing it clears`)
         .toBe(true);
+    }
+  });
+
+  it('never stands one inside a tower', () => {
+    // A deck's own cluster is not enough to check against: platforms overlap
+    // one another in plan and plenty of towers stand in the sea on no platform
+    // at all, so a lawn laid from `platform.occupied` alone ran straight
+    // through a neighbour's building — with trees inside it.
+    for (const tree of planted) {
+      for (const building of skyline.footprints) {
+        const gap = Math.hypot(
+          tree.centre.x - building.position.x,
+          tree.centre.z - building.position.z,
+        );
+        expect(gap, `tree at ${tree.centre.x.toFixed(0)},${tree.centre.z.toFixed(0)}`)
+          .toBeGreaterThan(building.radius);
+      }
     }
   });
 
