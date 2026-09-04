@@ -2,7 +2,7 @@ import { Vector3, type PerspectiveCamera } from 'three';
 import type { Audio } from '@/core/Audio';
 import type { Race } from './Race';
 import type { StandSite } from '@/track/scenery/Grandstands';
-import { BEAM_HEIGHT } from '@/track/scenery/StartLine';
+import { BEAM_HEIGHT } from '@/track/TrackGeometry';
 import { clamp01 } from '@/core/math';
 
 /**
@@ -116,10 +116,11 @@ export class AudioDirector {
   /**
    * Says the circuit's name once, as the intro hands the camera over.
    *
-   * Placed on the gantry: the pan is where the lights are relative to where
-   * the camera is looking, which during the orbit sweeps as the camera comes
-   * round. Only the chime can actually follow it — `Audio.announce` explains
-   * why the words cannot.
+   * Placed on the gantry: the level falls off with the distance to the lights
+   * and the pan is where they sit relative to where the camera is looking, both
+   * sampled on the frame it fires. A real tannoy horn does not move, so the
+   * chime does not track the orbit either — and only the chime could have, for
+   * the reason `Audio.announce` gives.
    */
   private announce(camera: PerspectiveCamera): void {
     const track = this.race.track;
@@ -139,11 +140,14 @@ export class AudioDirector {
   }
 
   /**
+   * @param camera Where the listener is, for the one sound placed off a
+   *   transform rather than off arc length.
    * @param orbiting True while the intro is circling the craft on the grid,
-   *   which is when the circuit announces itself. Passed in rather than read
-   *   off the stage, so this stays coupled to race state alone.
+   *   which is when the circuit announces itself. Both are required: there is
+   *   one caller, and a default would only invent a state where the
+   *   announcement is silently dropped.
    */
-  update(dt: number, camera?: PerspectiveCamera, orbiting = false): void {
+  update(dt: number, camera: PerspectiveCamera, orbiting: boolean): void {
     if (!this.audio.ready) return;
     const race = this.race;
     const player = race.player;
@@ -188,7 +192,7 @@ export class AudioDirector {
 
     this.updateCrowd(player.state.s, clamp01(player.telemetry.speedFraction), race.track.length);
 
-    if (!this.announced && orbiting && camera) this.announce(camera);
+    if (orbiting && !this.announced) this.announce(camera);
 
     if (race.phase === 'countdown') {
       const remaining = Math.ceil(race.countdown);

@@ -6,17 +6,12 @@ import { buildWordmark3D } from '@/ui/Wordmark3D';
 import { paintMaterial, paintText, stripe } from './RoadPaint';
 import type { Track } from '../Track';
 import { clamp } from '@/core/math';
+import { BEAM_HEIGHT } from '../TrackGeometry';
 
 /** Metres of road the gantry stands clear of the barrier on each side. */
 const PYLON_CLEARANCE = 2.2;
 /** Height of the underside of the cross beam, in metres. */
-/**
- * Height of the light beam above the road, in metres.
- *
- * Exported because the tannoy hangs off this gantry, and the announcement is
- * placed at the same point the lights are.
- */
-export const BEAM_HEIGHT = 11.4;
+
 /** Height and depth of the sign board carried above the beam, in metres. */
 const BOARD_HEIGHT = 4.2;
 const BOARD_DEPTH = 0.7;

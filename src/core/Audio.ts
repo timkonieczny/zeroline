@@ -1,4 +1,4 @@
-import { clamp01, lerp } from './math';
+import { clamp, clamp01, lerp } from './math';
 
 export interface AudioMix {
   master: number;
@@ -139,6 +139,8 @@ export class Audio {
   private reverb: ConvolverNode | null = null;
   /** Voices arrive asynchronously, so the one we settle on is kept. */
   private announcer: SpeechSynthesisVoice | null = null;
+  /** Pending handle for the gap between the chime and the words. */
+  private voiceTimer = 0;
 
   private crowd: {
     noise: AudioBufferSourceNode;
@@ -197,32 +199,32 @@ export class Audio {
     this.musicBus.gain.value = this.mix.music;
     this.musicBus.connect(this.master);
 
-    // The voice list is worth asking for now rather than at the moment of
-    // speaking. `getVoices` comes back empty on the first call after a load
-    // and fills in asynchronously, so an announcement that arrived before it
-    // did would fall through to the platform default — which on this machine
-    // is a man, and the announcer is supposed to be a woman.
-    Audio.primeVoices(() => {
-      this.announcer = null;
-      this.pickAnnouncer(window.speechSynthesis);
-    });
-
-    // A hall for the tannoy to ring in. Fed by sends and never in line, so
-    // everything else in the graph stays dry.
-    this.reverb = ctx.createConvolver();
-    this.reverb.buffer = Audio.impulse(ctx);
-    this.reverb.connect(this.effectsBus);
+    // Asked for once, and the answer thrown away. `getVoices` returns an
+    // empty list until the platform has populated it, and on Chrome it is this
+    // first call that starts that off — so asking here, on the first gesture,
+    // is what makes the list ready by the time a race announces itself.
+    // Without it the announcer falls through to the platform default, which is
+    // a man on this machine and the announcer is supposed to be a woman.
+    window.speechSynthesis?.getVoices();
 
     // One second of white noise, reused by every noise-based effect.
     const frames = Math.floor(ctx.sampleRate);
     this.noiseBuffer = ctx.createBuffer(1, frames, ctx.sampleRate);
-    const data = this.noiseBuffer.getChannelData(0);
-    // A fixed sequence rather than Math.random, so a session sounds the same
-    // twice and the noise bed never happens to start on a click.
-    let seed = 0x9e3779b9;
-    for (let i = 0; i < frames; i++) {
-      seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
-      data[i] = (seed / 0xffffffff) * 2 - 1;
+    Audio.fillNoise(this.noiseBuffer.getChannelData(0), 0x9e3779b9);
+  }
+
+  /**
+   * Fills a channel with white noise from a fixed sequence.
+   *
+   * Not `Math.random`: a session has to sound the same twice, and a bed that
+   * happened to start on a click would do it every time. Shared by the noise
+   * bed and the reverb's impulse, so the two cannot drift apart.
+   */
+  private static fillNoise(data: Float32Array, seed: number): void {
+    let state = seed >>> 0;
+    for (let i = 0; i < data.length; i++) {
+      state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+      data[i] = (state / 0xffffffff) * 2 - 1;
     }
   }
 
@@ -380,10 +382,18 @@ export class Audio {
   }
 
   /** A pitched blip. The building block for UI and pickups. */
-  private blip(frequency: number, duration: number, gain: number, to = frequency, type: OscillatorType = 'triangle'): void {
+  private blip(
+    frequency: number,
+    duration: number,
+    gain: number,
+    to = frequency,
+    type: OscillatorType = 'triangle',
+    delay = 0,
+    destination?: AudioNode,
+  ): OscillatorNode | null {
     const ctx = this.context;
-    if (!ctx || !this.effectsBus) return;
-    const now = ctx.currentTime;
+    if (!ctx || !this.effectsBus) return null;
+    const now = ctx.currentTime + delay;
 
     const osc = ctx.createOscillator();
     osc.type = type;
@@ -395,9 +405,10 @@ export class Audio {
     env.gain.exponentialRampToValueAtTime(gain, now + 0.008);
     env.gain.exponentialRampToValueAtTime(0.0001, now + duration);
 
-    osc.connect(env).connect(this.effectsBus);
+    osc.connect(env).connect(destination ?? this.effectsBus);
     osc.start(now);
     osc.stop(now + duration + 0.02);
+    return osc;
   }
 
   /** Hitting a barrier or another craft. `severity` is 0..1. */
@@ -519,60 +530,94 @@ export class Audio {
    */
   announce(name: string, level: number, pan: number): void {
     const ctx = this.context;
-    if (!ctx || !this.effectsBus || !this.reverb) return;
+    if (!ctx || !this.effectsBus) return;
 
+    const hall = this.hall(ctx);
     const loudness = clamp01(level) * CROWD_PEAK * ANNOUNCE_OVER_CROWD;
     const panner = ctx.createStereoPanner();
-    panner.pan.value = Math.max(-1, Math.min(1, pan));
+    panner.pan.value = clamp(pan, -1, 1);
     panner.connect(this.effectsBus);
 
     const send = ctx.createGain();
     send.gain.value = ANNOUNCE_WET;
-    send.connect(this.reverb);
+    send.connect(hall);
     panner.connect(send);
 
-    [CHIME_LOW, CHIME_HIGH].forEach((frequency, index) => {
-      const at = ctx.currentTime + index * CHIME_GAP;
-      const osc = ctx.createOscillator();
-      // A triangle, not a sine: a station chime has an edge on it.
-      osc.type = 'triangle';
-      osc.frequency.value = frequency;
-
-      const gain = ctx.createGain();
-      gain.gain.setValueAtTime(0.0001, at);
-      gain.gain.linearRampToValueAtTime(loudness * 0.5, at + 0.02);
-      gain.gain.exponentialRampToValueAtTime(0.0001, at + CHIME_RING);
-
-      osc.connect(gain);
-      gain.connect(panner);
-      osc.start(at);
-      osc.stop(at + CHIME_RING + 0.1);
-    });
+    // Two notes into the panner rather than the bus, so both the placement and
+    // the hall apply. The second one takes the nodes down with it when it ends
+    // — six of them per race, and they would otherwise stay wired to the
+    // convolver for the life of the context.
+    this.blip(CHIME_LOW, CHIME_RING, loudness * 0.5, CHIME_LOW, 'triangle', 0, panner);
+    const last = this.blip(
+      CHIME_HIGH,
+      CHIME_RING,
+      loudness * 0.5,
+      CHIME_HIGH,
+      'triangle',
+      CHIME_GAP,
+      panner,
+    );
+    if (last) {
+      last.onended = () => {
+        panner.disconnect();
+        send.disconnect();
+      };
+    }
 
     this.speak(`Welcome to ${name}`, loudness);
   }
 
   /**
+   * The hall, built the first time something needs it.
+   *
+   * Off the first-gesture path deliberately. Generating the impulse is eleven
+   * milliseconds and most of a megabyte, and handing it to a `ConvolverNode`
+   * costs a few more while Chrome partitions it — all of which a player who
+   * opens the menu and never starts a race would otherwise pay for a sound
+   * they never hear.
+   */
+  private hall(ctx: AudioContext): ConvolverNode {
+    if (this.reverb) return this.reverb;
+    this.reverb = ctx.createConvolver();
+    this.reverb.buffer = Audio.impulse(ctx);
+    this.reverb.connect(this.effectsBus!);
+    return this.reverb;
+  }
+
+  /**
    * The words, through the browser's own speech synthesis.
    *
-   * The level is taken from the player's own mix so it at least moves with the
-   * sliders, and the rate and pitch are pushed toward an announcer rather than
-   * a screen reader: slower, a little brighter, never the default cadence.
+   * The rate and pitch are pushed toward an announcer rather than a screen
+   * reader: slower, a little brighter, never the default cadence.
    */
   private speak(text: string, loudness: number): void {
     const speech = window.speechSynthesis;
     if (!speech) return;
 
-    window.setTimeout(() => {
+    // Held so `dispose` can cancel it. Without that the timer outlives the
+    // context and speaks a line into a torn-down game.
+    this.voiceTimer = window.setTimeout(() => {
       const utterance = new SpeechSynthesisUtterance(text);
-      const voice = this.pickAnnouncer(speech);
+      const voice = this.pickAnnouncer();
       if (voice) utterance.voice = voice;
       utterance.lang = voice?.lang ?? 'en-GB';
       utterance.rate = 0.92;
       utterance.pitch = 1.05;
-      utterance.volume = clamp01(loudness * this.mix.effects * this.mix.master * VOICE_MAKEUP);
+      utterance.volume = this.voiceLevel(loudness);
       speech.speak(utterance);
     }, ANNOUNCE_DELAY);
+  }
+
+  /**
+   * Where the voice sits, given how loud it would have been in the graph.
+   *
+   * The one place the bus gains are applied by hand. `speechSynthesis` never
+   * reaches `effectsBus` or `master`, so a mix change that everything else
+   * gets for free has to be read off here instead — and having exactly one
+   * place that does it is what keeps the next one from being forgotten.
+   */
+  private voiceLevel(loudness: number): number {
+    return clamp01(loudness * this.mix.effects * this.mix.master * VOICE_MAKEUP);
   }
 
   /**
@@ -581,12 +626,14 @@ export class Audio {
    * There is no attribute for the sex of a voice — the list is names and
    * locales — so this is a search through the ones that are reliably female on
    * each desktop platform, then any English voice, then whatever is first.
-   * Cached, because `getVoices` fills in asynchronously and returns an empty
-   * list on the first call after a load.
+   *
+   * Cached on the first call that finds anything. `getVoices` returns an empty
+   * list until the platform has populated it, which is why `build` asks once
+   * to start that off: by the time a race reaches its intro the list is there.
    */
-  private pickAnnouncer(speech: SpeechSynthesis): SpeechSynthesisVoice | null {
+  private pickAnnouncer(): SpeechSynthesisVoice | null {
     if (this.announcer) return this.announcer;
-    const voices = speech.getVoices();
+    const voices = window.speechSynthesis?.getVoices() ?? [];
     if (voices.length === 0) return null;
 
     const known = ['samantha', 'zira', 'hazel', 'sonia', 'libby', 'aria', 'jenny', 'karen', 'moira'];
@@ -595,45 +642,28 @@ export class Audio {
       english.find((voice) => known.some((name) => voice.name.toLowerCase().includes(name))) ??
       english.find((voice) => voice.name.toLowerCase().includes('female')) ??
       english[0] ??
-      voices[0] ??
-      null;
+      voices[0];
     return this.announcer;
-  }
-
-  /**
-   * Asks for the voice list, and asks again when the platform fills it in.
-   *
-   * Chrome populates it asynchronously and fires `voiceschanged` when it has;
-   * some platforms never fire it and have the list ready on the first call.
-   * Doing both covers each.
-   */
-  private static primeVoices(onReady: () => void): void {
-    const speech = window.speechSynthesis;
-    if (!speech) return;
-    if (speech.getVoices().length > 0) {
-      onReady();
-      return;
-    }
-    speech.addEventListener('voiceschanged', onReady, { once: true });
   }
 
   /**
    * A stadium's worth of concrete, as exponentially-decaying noise.
    *
    * Stereo and decorrelated: the same noise in both ears is a comb filter, not
-   * a room. The sequence is the fixed generator this file uses everywhere, so
-   * a session sounds the same twice.
+   * a room. The envelope is the expensive half — a fractional exponent, so a
+   * `Math.pow` per sample and not a multiply — and it is identical in both
+   * ears, so it is computed once and applied twice.
    */
   private static impulse(ctx: AudioContext): AudioBuffer {
     const frames = Math.floor(ctx.sampleRate * REVERB_SECONDS);
     const buffer = ctx.createBuffer(2, frames, ctx.sampleRate);
-    let seed = 0x1d872b41;
+    const envelope = new Float32Array(frames);
+    for (let i = 0; i < frames; i++) envelope[i] = (1 - i / frames) ** REVERB_DECAY;
+
     for (let channel = 0; channel < 2; channel++) {
       const data = buffer.getChannelData(channel);
-      for (let i = 0; i < frames; i++) {
-        seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
-        data[i] = ((seed / 0xffffffff) * 2 - 1) * (1 - i / frames) ** REVERB_DECAY;
-      }
+      Audio.fillNoise(data, channel === 0 ? 0x1d872b41 : 0x6b1f39c7);
+      for (let i = 0; i < frames; i++) data[i] *= envelope[i]!;
     }
     return buffer;
   }
@@ -699,7 +729,7 @@ export class Audio {
     const target = this.engineMuted ? 0 : clamp01(level) * CROWD_PEAK;
     const now = ctx.currentTime;
     this.crowd.gain.gain.setTargetAtTime(target, now, CROWD_GLIDE);
-    this.crowd.panner.pan.setTargetAtTime(Math.max(-1, Math.min(1, pan)), now, CROWD_GLIDE);
+    this.crowd.panner.pan.setTargetAtTime(clamp(pan, -1, 1), now, CROWD_GLIDE);
     this.crowd.body.frequency.setTargetAtTime(
       CROWD_BODY * (1 + clamp01(excitement) * 0.35),
       now,
@@ -725,6 +755,7 @@ export class Audio {
   }
 
   dispose(): void {
+    window.clearTimeout(this.voiceTimer);
     window.speechSynthesis?.cancel();
     this.stopEngine();
     this.stopCrowd();

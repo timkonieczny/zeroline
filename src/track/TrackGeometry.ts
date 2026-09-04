@@ -38,6 +38,17 @@ const _portal = new Vector3();
  * eye line is set against this, and the day one moves the other has to follow.
  */
 export const WALL_HEIGHT = 3.4;
+/**
+ * Height of the start gantry's light beam above the road, in metres.
+ *
+ * Here rather than in `scenery/StartLine`, which is where it is *built*: the
+ * audio director wants it too, to place the tannoy that hangs off the same
+ * structure, and importing a mesh builder into an audio module drags
+ * `three/webgpu` in behind it. `TrackGeometry` is the module that already
+ * exists to hold a dimension two unrelated things agree on — `WALL_HEIGHT`
+ * above is read by the grandstands for the same reason.
+ */
+export const BEAM_HEIGHT = 11.4;
 /** How far the barrier leans away from the road over its height, in metres. */
 const WALL_LEAN = 0.5;
 /** Width of the kerb strip at each edge, in metres. */
